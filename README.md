@@ -12,6 +12,17 @@ automatically by the IDF component manager during the build.
 
 In the root directory of the project:
 
+Before configuring or building, create your local credentials header:
+
+```shell
+cp main/secrets.h.example main/secrets.h
+```
+
+Replace every placeholder in `main/secrets.h`. It contains your Wi-Fi credentials and
+device token, is intentionally ignored by Git, and must never be committed. Set
+`BB_DEV_INSECURE` to `1` only for a local development API over `http://`; keep it `0`
+for release builds using `https://`.
+
 **To build the firmware** run ```idf.py build```
 
 **To upload the firmware to the device** run ```idf.py -p <PORT> flash```. Replace `<PORT>` with
@@ -34,3 +45,20 @@ esptool -c esp32s3 -b 921600 -p <PORT> write_flash 0 ButterBot-Firmware.bin
 Alternatively, you can also do so using [CircuitBlocks](https://code.circuitmess.com/) by
 logging in, clicking the "Restore Firmware" button in the top-right corner, and following the
 on-screen instructions.
+
+## Syncing this fork with CircuitMess
+
+Keep this fork aligned with the upstream firmware before starting new work. In a clone of
+this fork, add CircuitMess as the `upstream` remote once, then fetch and merge its `master`
+branch:
+
+```shell
+git remote add upstream https://github.com/CircuitMess/ButterBot-Firmware-Public.git
+git fetch upstream
+git switch master
+git merge upstream/master
+```
+
+Resolve and test any conflicts before pushing. You can also use GitHub's **Sync fork** button.
+Do not use an upstream sync to add `main/secrets.h`: local secrets stay untracked and are never
+included in a commit or pull request.

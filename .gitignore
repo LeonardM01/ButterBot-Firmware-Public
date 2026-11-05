@@ -1,5 +1,8 @@
 .idea
 
+# Local firmware credentials. Start with main/secrets.h.example, never commit this file.
+main/secrets.h
+
 cmake-build-debug
 build
 
