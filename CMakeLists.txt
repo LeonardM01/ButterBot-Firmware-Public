@@ -11,6 +11,8 @@ if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/main/secrets.h")
         "Missing main/secrets.h. Copy main/secrets.h.example to main/secrets.h "
         "and replace every placeholder before configuring the firmware.")
 endif()
+# Re-run this check when secrets.h changes or disappears, not only on a fresh configure.
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/main/secrets.h")
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(ButterBot-Firmware)
