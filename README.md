@@ -62,3 +62,32 @@ git merge upstream/master
 Resolve and test any conflicts before pushing. You can also use GitHub's **Sync fork** button.
 Do not use an upstream sync to add `main/secrets.h`: local secrets stay untracked and are never
 included in a commit or pull request.
+
+## Flash budget
+
+The 16 MB flash is fully partitioned, so new features (Wi-Fi, TLS, HTTP client) must fit in
+the `factory` app partition (8640 KB). Measured with ESP-IDF 5.5.3:
+
+| Build | App image | Free in `factory` |
+|---|---|---|
+| Upstream config | 8,627,632 B | 214 KB (2%) |
+| Current config: max log level Info, silent assertions | 8,415,088 B | 421 KB (5%) |
+| Current config + `CONFIG_COMPILER_OPTIMIZATION_SIZE` (`-Os`) | 8,151,520 B | 680 KB (8%) |
+
+Debug-level log calls are compiled out (they never print at the default Info level), and
+failed assertions abort without printing file and line.
+
+If more room is needed, these are the remaining levers, in order of cost:
+
+1. **Compile for size (`-Os`)**: about 260 KB more. Slows our own code slightly; the prebuilt
+   esp-sr and esp-dl libraries are unaffected. Test on the robot before keeping it.
+2. **Smaller flite voice**: the on-device TTS (`components/flite`) is about 4.6 MB of the app:
+   the `cmu_us_kal16` voice (about 3.9 MB) plus the CMU lexicon (about 0.56 MB). Its size does
+   not depend on how many phrases exist, so trimming phrases saves nothing. Switching to the
+   8 kHz `cmu_us_kal` voice should save roughly 2 MB at lower audio quality (estimate, not yet
+   measured).
+3. **Remove flite entirely**: frees about 4.6 MB, but every spoken phrase then has to come from
+   butterbot-api. The robot goes silent without Wi-Fi or the server (including the intruder
+   alert), each phrase waits on the network, and the current time and taught IR command names
+   (spoken from phonemes) need server-side TTS too. Pre-recording the ~690 phrases instead
+   does not help: about 30 minutes of speech takes more space than flite.
