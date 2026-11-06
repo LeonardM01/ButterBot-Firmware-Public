@@ -81,8 +81,10 @@ size_t loadQuestion(uint8_t* buf, size_t cap){
 }
 
 void finish(){
-	if(AskWorker* worker = ServiceLocator::AskWorkerInstance){
-		printf("BBMEASURE stack task=AskWorker size=%u min_free=%u\n", (unsigned) AskWorker::StackBytes, (unsigned) worker->stackMinFree());
+	if(const AskWorker* worker = ServiceLocator::AskWorkerInstance){
+		char line[MeasureLineBytes];
+		formatStackMeasure(line, sizeof(line), "AskWorker", AskWorker::StackBytes, worker->stackMinFree());
+		printf("%s\n", line);
 	}
 	if(turn.monitoring){
 		heap_caps_monitor_local_minimum_free_size_stop();
