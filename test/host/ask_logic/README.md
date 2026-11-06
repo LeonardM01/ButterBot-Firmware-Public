@@ -5,9 +5,10 @@ Unity tests for the pure logic behind the `/v1/ask` client. They build with the 
 Covered code is in `main/src/Net/`:
 
 - `AskOutcome`: maps the HTTP status to play, didn't-understand or thoughts-got-lost.
-- `UrlPolicy`: `https://` always, `http://` only with `BB_DEV_INSECURE`.
+- `UrlPolicy`: `https://` always, `http://` only with `BB_DEV_INSECURE`; the host to resolve.
 - `WavStreamParser`: checks the reply's WAV header as it streams in.
 - `SampleAligner`: keeps 16-bit samples whole across network reads.
+- `TurnAbort`: an abort sticks to the turn it was aimed at, even before `ask()` runs.
 
 The firmware-only parts (`AskClient`, `StreamingPcmSource`) need the robot.
 
