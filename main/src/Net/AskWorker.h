@@ -32,9 +32,10 @@ class WiFiService;
 class AskWorker {
 public:
 	/**
-	 * esp_http_client over http:// used 3,344 B of an 8,192 B stack on the robot (turn5.log, min_free 4,848).
-	 * TLS is not measured yet (#23); mbedTLS keeps its buffers on the heap (CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC),
-	 * so 12 KB in PSRAM leaves ample room. Every turn logs the high-water mark; M1 sign-off is due with #23.
+	 * M1, measured on the robot over http://: min_free 9,532 of 12,288 B (2,756 B used) on each of four voice
+	 * turns (#22); #20's DebugAsk worker used 3,344 B of 8,192. TLS is not measured yet (#23): mbedTLS keeps its
+	 * buffers on the heap (CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC), and every turn logs `AskWorker: stack min_free=`,
+	 * so the https sign-off comes from that line.
 	 */
 	static constexpr uint32_t StackBytes = 12 * 1024;
 	static constexpr UBaseType_t Priority = 5;  // below BBStateMachine (10), Audio (12) and lwIP (18)
