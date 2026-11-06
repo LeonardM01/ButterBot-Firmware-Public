@@ -36,8 +36,13 @@ DebugAskState::DebugAskState(BBStateMachine* sm) : State(sm){
 }
 
 DebugAskState::~DebugAskState(){
+	// Normally the turn has cleaned up already: tick() leaves only once it has. This is the backstop for any
+	// other way out, so the next state can't load the models while the worker still holds them.
 	if(DebugAsk::running()){
 		DebugAsk::abort();
+		if(!DebugAsk::waitIdle(ExitWaitMs)){
+			CMF_LOG(DebugAskState, LogLevel::Warning, "debug ask turn still cleaning up after %d ms", (int) ExitWaitMs);
+		}
 	}
 	if(ServiceLocator::LEDControlInstance){
 		ServiceLocator::LEDControlInstance->stopListen();
@@ -45,7 +50,13 @@ DebugAskState::~DebugAskState(){
 }
 
 void DebugAskState::tick(float deltaTime){
-	if(!DebugAsk::running() && !sm->isTransitionPending()){
+	// Leave only after the worker has stopped the AFE and unloaded the models, so whatever comes next
+	// (a listen turn from Idle, RC mode) never finds them still in use.
+	if(DebugAsk::running() || sm->isTransitionPending()) return;
+
+	if(rcRequested){
+		sm->transitionTo<RCState>();
+	}else{
 		sm->transitionTo<IdleState>();
 	}
 }
@@ -60,7 +71,9 @@ void DebugAskState::onRCData(const RCData& data){
 	if(ServiceLocator::ControllerStateInstance){
 		ServiceLocator::ControllerStateInstance->updateRCData(data);
 	}
-	sm->transitionTo<RCState>();
+	// RCState aborts the turn too, but the worker has to clean up before the state changes.
+	DebugAsk::abort();
+	rcRequested = true;
 }
 
 #endif

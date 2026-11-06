@@ -26,6 +26,7 @@ constexpr char QuestionPath[] = "/spiffs/debug/question.wav"; // staged into SPI
 constexpr size_t CaptureBytes = 320044;  // 10 s of 16 kHz mono s16 plus a WAV header (#3)
 constexpr uint32_t OnlineTimeoutMs = 20000;
 constexpr uint32_t OnlinePollMs = 250;   // bounds abort latency while waiting for Wi-Fi
+constexpr uint32_t IdlePollMs = 10;
 
 // esp_http_client (and TLS on an https build) needs ~8 KB. Internal RAM, because the task reads SPIFFS.
 constexpr uint32_t StackBytes = 8192;
@@ -256,6 +257,15 @@ bool DebugAsk::running(){
 
 void DebugAsk::abort(){
 	worker.abort();
+}
+
+bool DebugAsk::waitIdle(uint32_t timeoutMs){
+	const int64_t tStart = esp_timer_get_time();
+	while(worker.running()){
+		if(msSince(tStart) >= timeoutMs) return false;
+		vTaskDelay(pdMS_TO_TICKS(IdlePollMs));
+	}
+	return true;
 }
 
 #endif

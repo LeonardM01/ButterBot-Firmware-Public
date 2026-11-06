@@ -12,7 +12,9 @@
  * its worker task, so no routine or listen turn touches the AFE or Audio meanwhile. Entered from Idle
  * on a medium power-button press; back to Idle when the turn has cleaned up.
  *
- * A power-button press aborts the turn. RC data aborts it and enters RC mode.
+ * A power-button press aborts the turn. RC data aborts it and enters RC mode. Either way the state is left
+ * only once the worker has unloaded the models (normally within about 0.5 s; see AskClient::abortInFlight),
+ * so the next state can load them safely. The state machine keeps ticking meanwhile.
  */
 class DebugAskState : public State {
 public:
@@ -26,6 +28,10 @@ public:
 
 private:
 	static constexpr int64_t PollMs = 100;
+	/** Longest the destructor blocks the state machine if the state is ever left before cleanup. */
+	static constexpr uint32_t ExitWaitMs = 2000;
+
+	bool rcRequested = false;
 
 	void onButtonEvent(int button, ISRButtonInput::Action action);
 
