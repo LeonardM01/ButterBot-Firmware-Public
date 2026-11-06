@@ -22,6 +22,7 @@
 #include <Util/ServiceLocator.h>
 #include "BBData.h"
 #include "Enums.h"
+#include "AskState.h"
 #include "IdleState.h"
 #include "RCState.h"
 #include "ScenarioState.h"
@@ -30,11 +31,13 @@
 #include "Services/IRStorage.h"
 #include "Routines/IRActionRoutine.h"
 #include "ScenarioRoutineMappings.h"
+#include "Net/AskLines.h"
+#include "Util/VoiceTurnHeap.h"
 
 DEFINE_LOG(ListenState)
 
-static void playPhraseBlocking(const Application* app, Phrase phrase){
-    if(app == nullptr){
+static void playTextBlocking(const Application* app, const std::string& text){
+    if(app == nullptr || text.empty()){
         return;
     }
 
@@ -43,19 +46,18 @@ static void playPhraseBlocking(const Application* app, Phrase phrase){
         return;
     }
 
+    auto source = std::make_unique<SpeechAudioSource>(SpeechGen::InputType::Text, text);
+    audio->play(ServiceLocator::SpeechAudioGenInstance.get(), std::move(source));
+    audio->waitEnd(portMAX_DELAY);
+}
+
+static void playPhraseBlocking(const Application* app, Phrase phrase){
     const int16_t id = Phrases::get(phrase);
     if(id < 0){
         return;
     }
 
-    const std::string text = Phrases::map(phrase, id);
-    if(text.empty()){
-        return;
-    }
-
-    auto source = std::make_unique<SpeechAudioSource>(SpeechGen::InputType::Text, text);
-    audio->play(ServiceLocator::SpeechAudioGenInstance.get(), std::move(source));
-    audio->waitEnd(portMAX_DELAY);
+    playTextBlocking(app, Phrases::map(phrase, id));
 }
 
 static const char* TAG = "ListenState";
@@ -193,6 +195,18 @@ ListenState::ListenState(BBStateMachine* sm) : State(sm){
 
     const Application* app = ApplicationStatics::getApplication();
 
+    // Internal-RAM guard (decisions #9, docs/voice-turn-memory.md): loading AFE + MultiNet with too little
+    // internal RAM reboots the robot, so refuse and say so instead. Under the budget this never fires.
+    const HeapSnapshot idle = VoiceTurnHeap::beginTurn();
+    if(!VoiceTurnHeap::modelLoadAllowed(idle)){
+        CMF_LOG(ListenState, LogLevel::Warning, "Not loading the speech models: internal RAM free %u B (need %u), largest block %u B (need %u)",
+                (unsigned) idle.intFree, (unsigned) VoiceTurnHeap::ModelLoadMinIntFree,
+                (unsigned) idle.intLargest, (unsigned) VoiceTurnHeap::ModelLoadMinIntLargest);
+        refused = true;
+        sm->transitionTo<IdleState>();
+        return;
+    }
+
     buildAndPlayIntro(app);
 
     auto buttonInput = app->getService<ISRButtonInput>();
@@ -228,6 +242,7 @@ ListenState::ListenState(BBStateMachine* sm) : State(sm){
     }
 
 	audioFrontend->loadModel();
+    VoiceTurnHeap::mark(VoiceTurnHeap::Point::Loaded);
 
     audioFrontend->setMode(AudioFrontend::Mode::Off);
 
@@ -251,6 +266,11 @@ ListenState::ListenState(BBStateMachine* sm) : State(sm){
         audio->waitEnd(portMAX_DELAY);
 
         sm->bindState(audioFrontend->onPhrase, this, &ListenState::onPhrase);
+        // Record the question too, into the boot-time buffer (#22). setMode(Off) detaches it.
+        if(VoiceCapture* capture = ServiceLocator::VoiceCaptureInstance.get()){
+            capture->begin();
+            audioFrontend->setCapture(&capture->recorder());
+        }
         audioFrontend->setMode(AudioFrontend::Mode::Speech);
     }
 }
@@ -258,13 +278,21 @@ ListenState::ListenState(BBStateMachine* sm) : State(sm){
 ListenState::~ListenState(){
     // Event bindings are dropped by BBStateMachine::unbindStateEvents() after this dtor runs.
     const Application* app = ApplicationStatics::getApplication();
+    // Unloading here, before AskState's constructor runs, gives the network phase back ~17 KB of internal RAM.
     if(AudioFrontend* audioFrontend = app->getService<AudioFrontend>()){
         audioFrontend->setMode(AudioFrontend::Mode::Off);
 		audioFrontend->unloadModel();
     }
 
-    if(timedOut){
+    if(refused){
+        playTextBlocking(app, askLineText(AskLine::ThoughtsLost, (uint32_t) rand()));
+    }else if(timedOut){
         playPhraseBlocking(app, Phrase::ListeningTimeout);
+    }
+
+    // A question handed to AskState is still the same turn; it ends there.
+    if(!askRequested){
+        VoiceTurnHeap::endTurn();
     }
 }
 
@@ -275,9 +303,20 @@ void ListenState::onRC(){
 void ListenState::onPhrase(bool recognized, int index, const std::string& transcript, float confidence){
 	// Runs on the AFE proc task. Do NOT stop the AFE or play audio here
     if(!recognized){
-    	CMF_LOG(ListenState, LogLevel::Info, "Listen result: recognized=%d, index=%d, transcript='%s', confidence=%.2f",
-			recognized, index, transcript.c_str(), confidence);
+        // Sizes only, never the transcript (S0.5).
+        VoiceCapture* capture = ServiceLocator::VoiceCaptureInstance.get();
+        const bool question = capture != nullptr && capture->recorder().state() == UtteranceRecorder::State::Done && capture->recorder().bytes() > 0;
+    	CMF_LOG(ListenState, LogLevel::Info, "Listen result: no command, question=%d, recorded %u B",
+			question, capture != nullptr ? (unsigned) capture->recorder().bytes() : 0u);
 
+        if(question){
+            // Not a built-in command: ask the API (#22). The models unload in the destructor first.
+            askRequested = true;
+            sm->transitionTo<AskState>();
+            return;
+        }
+
+        // No speech at all: today's local "didn't understand", no upload (decisions #3).
         ListenData listenData{.phase = ListenData::Phase::NotUnderstand};
         com->sendData(BB::State::Listen, BB::Action::Listen{}, listenData);
         timedOut = true;
