@@ -71,7 +71,10 @@ public:
 
     // STATION FUNCTIONS
 #ifdef CONFIG_CMF_WIFI_STA_SUPPORT
-	void startStation() noexcept;
+	// dhcpClient: obtain the address with DHCP (posts IP_EVENT_STA_GOT_IP) instead of the static 11.0.0.2.
+	// storage: WIFI_STORAGE_RAM keeps every esp_wifi_set_config out of NVS.
+	void startStation(bool dhcpClient = false, wifi_storage_t storage = WIFI_STORAGE_FLASH) noexcept;
+	esp_netif_t* getNetif() const noexcept;
 
     void resetIPInfo() const noexcept;
     void connect() const noexcept;
@@ -91,7 +94,7 @@ private:
 
 private:
     void onNativeEvent(uint32_t id, void* data) noexcept;
-    void createNetif() noexcept;
+    void createNetif(bool dhcpClient = false) noexcept;
 };
 
 #endif //WIFI_H
