@@ -6,7 +6,6 @@
 #include <cstdio>
 #include <optional>
 #include <esp_heap_caps.h>
-#include <esp_timer.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <Core/Application.h>
@@ -15,6 +14,7 @@
 #include "Audio/AudioFrontend.h"
 #include "Audio/PcmPassthroughGen.h"
 #include "Net/AskClient.h"
+#include "Util/Elapsed.h"
 #include "Util/ServiceLocator.h"
 #include "MeasureFormat.h"
 
@@ -68,10 +68,6 @@ void printHeap(const char* at, const HeapSnapshot& s, bool turnMinimum){
 
 void printNow(const char* at, bool turnMinimum){
 	printHeap(at, snapshot(), turnMinimum);
-}
-
-uint32_t msSince(int64_t startUs){
-	return (uint32_t) ((esp_timer_get_time() - startUs) / 1000);
 }
 
 class Worker {
@@ -164,7 +160,7 @@ private:
 	}
 
 	void runTurn(){
-		const int64_t tStart = esp_timer_get_time();
+		const int64_t tStart = nowUs();
 		connected = playing = downloaded = HeapSnapshot{};
 
 		// The Wi-Fi core is fixed by sdkconfig, so compare core 0 and 1 with two builds (docs/measurement-build.md).
@@ -211,7 +207,7 @@ private:
 			return;
 		}
 
-		const int64_t tLoad = esp_timer_get_time();
+		const int64_t tLoad = nowUs();
 		afe.loadModel(); // AFE + MultiNet, as ListenState does
 		afe.setMode(AudioFrontend::Mode::VAD);
 		const uint32_t loadMs = msSince(tLoad);
@@ -260,7 +256,7 @@ void DebugAsk::abort(){
 }
 
 bool DebugAsk::waitIdle(uint32_t timeoutMs){
-	const int64_t tStart = esp_timer_get_time();
+	const int64_t tStart = nowUs();
 	while(worker.running()){
 		if(msSince(tStart) >= timeoutMs) return false;
 		vTaskDelay(pdMS_TO_TICKS(IdlePollMs));

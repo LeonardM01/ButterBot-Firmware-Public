@@ -6,12 +6,12 @@
 #include <esp_heap_caps.h>
 #include <esp_http_client.h>
 #include <esp_log.h>
-#include <esp_timer.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <Log/Log.h>
 #include <Services/Audio/Audio.h>
 #include "Audio/StreamingPcmSource.h"
+#include "Util/Elapsed.h"
 #include "SampleAligner.h"
 #include "UrlPolicy.h"
 #include "WavStreamParser.h"
@@ -42,14 +42,6 @@ constexpr uint32_t PollMs = 500;          // socket timeout while waiting, bound
 constexpr uint32_t PcmBytesPerSecond = 16000 * 2;
 constexpr uint32_t PlaybackMarginMs = 3000;
 constexpr TickType_t PlaybackPoll = pdMS_TO_TICKS(20);
-
-int64_t nowUs(){
-	return esp_timer_get_time();
-}
-
-uint32_t msBetween(int64_t fromUs, int64_t toUs){
-	return (uint32_t) ((toUs - fromUs) / 1000);
-}
 
 struct HttpCleanup {
 	void operator()(esp_http_client* client) const{ esp_http_client_cleanup(client); }
