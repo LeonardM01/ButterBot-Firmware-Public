@@ -80,6 +80,20 @@ void AskClient::abort(){
 	abortRequested = true;
 }
 
+void AskClient::abortInFlight(){
+	abortGeneration.fetch_add(1);
+}
+
+bool AskClient::stopRequested() const{
+	return abortRequested || abortGeneration.load() != turnGeneration;
+}
+
+void AskClient::notify(AskPhase phase) const{
+	if(config.onPhase != nullptr){
+		config.onPhase(phase, config.phaseCtx);
+	}
+}
+
 void AskClient::logSecurityPosture(){
 	if constexpr(BB_DEV_INSECURE != 0){
 		warnInsecure();
@@ -88,6 +102,7 @@ void AskClient::logSecurityPosture(){
 
 AskResult AskClient::ask(const uint8_t* wav, size_t len){
 	abortRequested = false;
+	turnGeneration = abortGeneration.load();
 	AskResult r;
 
 	if constexpr(BB_DEV_INSECURE != 0){
@@ -126,9 +141,11 @@ AskResult AskClient::ask(const uint8_t* wav, size_t len){
 	}
 	const int64_t tConnected = nowUs();
 	r.connectMs = msBetween(tStart, tConnected);
+	notify(AskPhase::Connected);
+	const int64_t tUploadStart = nowUs(); // the hook's time is not upload time
 
 	for(size_t sent = 0; sent < len;){
-		if(abortRequested){
+		if(stopRequested()){
 			r.aborted = true;
 			return r;
 		}
@@ -142,7 +159,7 @@ AskResult AskClient::ask(const uint8_t* wav, size_t len){
 		r.uploadBytes = sent;
 	}
 	const int64_t tUploaded = nowUs();
-	r.uploadMs = msBetween(tConnected, tUploaded);
+	r.uploadMs = msBetween(tUploadStart, tUploaded);
 
 	// Wait for the status line and headers in short polls so abort() is noticed.
 	esp_http_client_set_timeout_ms(client, (int) PollMs);
@@ -150,7 +167,7 @@ AskResult AskClient::ask(const uint8_t* wav, size_t len){
 	for(;;){
 		contentLength = esp_http_client_fetch_headers(client);
 		if(contentLength != -ESP_ERR_HTTP_EAGAIN) break;
-		if(abortRequested){
+		if(stopRequested()){
 			r.aborted = true;
 			return r;
 		}
@@ -198,6 +215,7 @@ AskResult AskClient::ask(const uint8_t* wav, size_t len){
 		audio.play(&generator, std::make_unique<StreamingPcmSource>(stream));
 		playing = true;
 		r.firstAudioMs = msBetween(tUploaded, nowUs());
+		notify(AskPhase::Playing);
 	};
 
 	// Writes whole samples to the ring, waiting for room. False when aborted, when
@@ -206,7 +224,7 @@ AskResult AskClient::ask(const uint8_t* wav, size_t len){
 		if(n == 0) return true;
 		const int64_t tQueue = nowUs();
 		while(!stream->write(p, n, pdMS_TO_TICKS(PollMs))){
-			if(abortRequested || stream->consumerGone()) return false;
+			if(stopRequested() || stream->consumerGone()) return false;
 			if(!playing){
 				startPlayback(); // ring full before the prebuffer mark: start draining it
 			}else if(msBetween(tQueue, nowUs()) >= config.stallTimeoutMs){
@@ -219,7 +237,7 @@ AskResult AskClient::ask(const uint8_t* wav, size_t len){
 	};
 
 	for(;;){
-		if(abortRequested || (playing && stream->consumerGone())){
+		if(stopRequested() || (playing && stream->consumerGone())){
 			r.aborted = true;
 			break;
 		}
@@ -289,7 +307,7 @@ AskResult AskClient::ask(const uint8_t* wav, size_t len){
 		pcmAccepted += left;
 		const auto aligned = aligner.push(p, left);
 		if(!queue(aligned.pair, aligned.pairLen) || !queue(aligned.body, aligned.bodyLen)){
-			r.aborted = abortRequested || stream->consumerGone();
+			r.aborted = stopRequested() || stream->consumerGone();
 			r.truncated = !r.aborted;
 			break;
 		}
@@ -313,6 +331,7 @@ AskResult AskClient::ask(const uint8_t* wav, size_t len){
 
 	if(tFirstByte != 0){
 		r.downloadMs = msBetween(tFirstByte, tLastByte);
+		notify(AskPhase::Downloaded);
 	}
 	// Release the socket and the client's buffers before waiting out playback.
 	http.reset();
@@ -337,7 +356,7 @@ AskResult AskClient::ask(const uint8_t* wav, size_t len){
 		const uint32_t budgetMs = (uint32_t) (stream->buffered() * 1000 / PcmBytesPerSecond) + PlaybackMarginMs;
 		const int64_t tWait = nowUs();
 		while(!stream->consumerGone()){
-			if(abortRequested && !r.aborted){
+			if(stopRequested() && !r.aborted){
 				r.aborted = true;
 				stream->cancel(); // the source ends at its next read and Audio stops
 			}
