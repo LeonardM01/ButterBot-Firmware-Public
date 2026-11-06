@@ -69,6 +69,12 @@ public:
 
 	const PhaseHeap& phaseHeap() const{ return heap; }
 
+	/**
+	 * True once the reply is audible: Audio has started it, after any filler queued before it. False before,
+	 * and again once playback has ended. Any task.
+	 */
+	bool replyAudible() const{ return generator.isOpen(); }
+
 	/** Lowest free stack seen on the worker, in bytes (uxTaskGetStackHighWaterMark after each turn). */
 	uint32_t stackMinFree() const{ return stackFree.load(); }
 

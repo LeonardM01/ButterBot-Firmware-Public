@@ -32,6 +32,7 @@ DebugAskState::DebugAskState(BBStateMachine* sm) : State(sm){
 
 	if(ServiceLocator::LEDControlInstance){
 		ServiceLocator::LEDControlInstance->startListen();
+		ledBlinking = true;
 	}
 }
 
@@ -47,6 +48,11 @@ DebugAskState::~DebugAskState(){
 void DebugAskState::tick(float deltaTime){
 	// Leave only after the turn is over (the models are unloaded within its first steps, the worker has
 	// returned), so whatever comes next (a listen turn from Idle, RC mode) finds the AFE and Audio free.
+	// Blink until the reply is heard, as a voice turn does.
+	if(ledBlinking && ServiceLocator::AskWorkerInstance && ServiceLocator::AskWorkerInstance->replyAudible()){
+		ServiceLocator::LEDControlInstance->stopListen();
+		ledBlinking = false;
+	}
 	if(sm->isTransitionPending() || DebugAsk::poll()) return;
 
 	if(rcRequested){

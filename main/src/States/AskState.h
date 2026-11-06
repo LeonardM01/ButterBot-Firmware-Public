@@ -48,11 +48,14 @@ private:
 	uint32_t turn = 0;
 	Com* com = nullptr;
 	bool networkLogged = false;
+	bool thinkingLed = false; // the status LED blinks: from the filler until the reply is audible
 	// Set from event handlers, read in tick().
 	std::atomic<bool> cancelled{false};
 	std::atomic<bool> rcRequested{false};
 
 	void start();
+
+	void setThinkingLed(bool on);
 
 	void onWorkerDone();
 

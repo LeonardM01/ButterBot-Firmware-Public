@@ -32,6 +32,7 @@ private:
 	static constexpr uint32_t ExitWaitMs = 2000;
 
 	bool rcRequested = false;
+	bool ledBlinking = false;
 
 	void onButtonEvent(int button, ISRButtonInput::Action action);
 

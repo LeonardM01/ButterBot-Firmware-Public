@@ -1,8 +1,6 @@
 #include "AskWorker.h"
 #include <esp_heap_caps.h>
 #include <Log/Log.h>
-#include <Util/ServiceLocator.h>
-#include "Services/LEDControl.h"
 #include "Services/WiFi/WiFiService.h"
 #include "Util/Elapsed.h"
 #include "Util/VoiceTurnHeap.h"
@@ -77,11 +75,8 @@ void AskWorker::onPhase(AskPhase phase){
 			heap.connected = takeHeapSnapshot();
 			break;
 		case AskPhase::Playing:
+			// Queued only: a filler may still be speaking. The voice turn's LED follows replyAudible() instead.
 			heap.playing = takeHeapSnapshot();
-			// The reply is playing: from fast blink ("thinking") to the playing pattern.
-			if(ServiceLocator::LEDControlInstance){
-				ServiceLocator::LEDControlInstance->stopListen();
-			}
 			break;
 		case AskPhase::Downloaded:
 			heap.downloaded = takeHeapSnapshot();

@@ -59,7 +59,7 @@ void sayLine(AskLine line, Cut cut){
 	}
 }
 
-void setThinkingLed(bool on){
+void setLed(bool on){
 	if(!ServiceLocator::LEDControlInstance) return;
 	if(on){
 		ServiceLocator::LEDControlInstance->startListen();
@@ -68,6 +68,11 @@ void setThinkingLed(bool on){
 	}
 }
 
+}
+
+void AskState::setThinkingLed(bool on){
+	thinkingLed = on;
+	setLed(on);
 }
 
 AskState::AskState(BBStateMachine* sm) : State(sm){
@@ -140,7 +145,13 @@ void AskState::tick(float deltaTime){
 
 	switch(stage){
 		case Stage::Asking:
-			if(ServiceLocator::AskWorkerInstance->busy()) return;
+			if(ServiceLocator::AskWorkerInstance->busy()){
+				// The filler isn't the answer: blink until the reply itself is heard (#10).
+				if(thinkingLed && ServiceLocator::AskWorkerInstance->replyAudible()){
+					setThinkingLed(false);
+				}
+				return;
+			}
 			onWorkerDone();
 			return;
 
