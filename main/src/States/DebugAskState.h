@@ -8,13 +8,13 @@
 #include "Services/ISRButtonInput.h"
 
 /**
- * Measurement build only (BB_DEBUG_ASK 1): holds the robot out of Idle while a debug ask turn runs on
- * its worker task, so no routine or listen turn touches the AFE or Audio meanwhile. Entered from Idle
+ * Measurement build only (BB_DEBUG_ASK 1): holds the robot out of Idle while a debug ask turn runs (its steps
+ * in tick(), the request on the shared AskWorker), so no routine or listen turn touches the AFE or Audio meanwhile. Entered from Idle
  * on a medium power-button press; back to Idle when the turn has cleaned up.
  *
  * A power-button press aborts the turn. RC data aborts it and enters RC mode. Either way the state is left
- * only once the worker has unloaded the models (normally within about 0.5 s; see AskClient::abortInFlight),
- * so the next state can load them safely. The state machine keeps ticking meanwhile.
+ * only once the worker has returned (normally within about 0.5 s; see AskClient::abortInFlight),
+ * so the next state can use the AFE and Audio safely. The state machine keeps ticking meanwhile.
  */
 class DebugAskState : public State {
 public:

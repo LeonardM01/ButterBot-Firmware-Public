@@ -37,12 +37,9 @@ DebugAskState::DebugAskState(BBStateMachine* sm) : State(sm){
 
 DebugAskState::~DebugAskState(){
 	// Normally the turn has cleaned up already: tick() leaves only once it has. This is the backstop for any
-	// other way out, so the next state can't load the models while the worker still holds them.
-	if(DebugAsk::running()){
-		DebugAsk::abort();
-		if(!DebugAsk::waitIdle(ExitWaitMs)){
-			CMF_LOG(DebugAskState, LogLevel::Warning, "debug ask turn still cleaning up after %d ms", (int) ExitWaitMs);
-		}
+	// other way out, so the next state never finds a reply still playing behind its back.
+	if(!DebugAsk::stop(ExitWaitMs)){
+		CMF_LOG(DebugAskState, LogLevel::Warning, "ask worker still busy after %d ms", (int) ExitWaitMs);
 	}
 	if(ServiceLocator::LEDControlInstance){
 		ServiceLocator::LEDControlInstance->stopListen();
@@ -50,9 +47,9 @@ DebugAskState::~DebugAskState(){
 }
 
 void DebugAskState::tick(float deltaTime){
-	// Leave only after the worker has stopped the AFE and unloaded the models, so whatever comes next
-	// (a listen turn from Idle, RC mode) never finds them still in use.
-	if(DebugAsk::running() || sm->isTransitionPending()) return;
+	// Leave only after the turn is over (the models are unloaded within its first steps, the worker has
+	// returned), so whatever comes next (a listen turn from Idle, RC mode) finds the AFE and Audio free.
+	if(sm->isTransitionPending() || DebugAsk::poll()) return;
 
 	if(rcRequested){
 		sm->transitionTo<RCState>();
