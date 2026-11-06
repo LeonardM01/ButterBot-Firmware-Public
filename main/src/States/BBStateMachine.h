@@ -13,6 +13,7 @@
 #include "Event/EventBroadcaster.h"
 #include "State.h"
 #include "StateRoutineFactory.h"
+#include "TransitionSlot.h"
 
 /**
  * @brief Trivial Object used purely as an event-binding owner. EventHandles are keyed on an Object
@@ -50,14 +51,15 @@ public:
 	/**
 	 * @brief Queue a transition to state T. The state is constructed (placement-new) on the next tick,
 	 * after the current state has been torn down. Wakes the ticking thread so it happens promptly.
+	 * A state may call this from its own constructor; the transition then runs on the following tick.
 	 */
 	template<class T>
 	void transitionTo(){
-		next = &makeState<T>;
+		next.request(&makeState<T>);
 		OnTransition.broadcast();
 	}
 
-	bool isTransitionPending() const noexcept { return next != nullptr; }
+	bool isTransitionPending() const noexcept { return next.pending(); }
 	State* getActiveState() const noexcept { return currentState; }
 	Routine* getActiveRoutine() const noexcept { return currentRoutine; }
 
@@ -133,7 +135,7 @@ private:
 	State* currentState = nullptr;
 	Routine* currentRoutine = nullptr;
 
-	StateFactory next = nullptr;
+	TransitionSlot<StateFactory> next;
 
 	std::vector<std::function<void()>> stateUnbinds;
 	std::vector<std::function<void()>> routineUnbinds;

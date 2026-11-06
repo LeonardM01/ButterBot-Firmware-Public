@@ -1,10 +1,13 @@
 #include "AudioFrontend.h"
+#include <esp_err.h>
+#include <esp_heap_caps.h>
 #include <esp_timer.h>
 #include <algorithm>
 #include <cstring>
 #include <limits>
 #include <span>
 #include <Util/ServiceLocator.h>
+#include "Util/ListenLed.h"
 #include "esp_afe_sr_models.h"
 #include "esp_mn_models.h"
 #include "esp_mn_speech_commands.h"
@@ -12,6 +15,33 @@
 DEFINE_LOG(AudioFrontend)
 
 namespace {
+	/**
+	 * While alive, plain malloc() of any size prefers PSRAM; the destructor restores
+	 * CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL on every way out of the scope (C6).
+	 *
+	 * Why the load needs it: on the robot every AFE + MultiNet load drove internal RAM down to 59-319 B free,
+	 * whatever it started from. esp-sr's MultiNet, VAD net, FST, G2P and dl libs call plain malloc()/calloc()
+	 * (`nm -u` on the esp32s3 archives), and with the 256 B limit their small blocks fill internal RAM first; the next
+	 * must-be-internal allocation (a FreeRTOS mutex) then fails and reboots. afe_config_t::memory_alloc_mode
+	 * steers only the AFE's own buffers and MultiNet has no such knob, so they can't do this.
+	 *
+	 * Used by loadModel() and setSpeechPhrases(). It is global for ~770 ms of load plus the phrase registration:
+ * other tasks' plain malloc() lands in PSRAM too. heap_caps_malloc_default()
+	 * already falls back to PSRAM once internal RAM is short, which every #20 load caused, so no correct code
+	 * relies on plain malloc() for DMA, ISR or cache-off memory; IDF drivers and FreeRTOS ask for caps
+	 * explicitly. See docs/voice-turn-memory.md, "The extmem window".
+	 */
+	class ExtmemFirst {
+	public:
+		ExtmemFirst(){ heap_caps_malloc_extmem_enable(0); }
+
+		~ExtmemFirst(){ heap_caps_malloc_extmem_enable(CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL); }
+
+		ExtmemFirst(const ExtmemFirst&) = delete;
+
+		ExtmemFirst& operator=(const ExtmemFirst&) = delete;
+	};
+
 	constexpr float FuzzyMargin = 0.1f;
 	constexpr float ShortWordWeight = 0.5f;
 	constexpr size_t ShortWordMaxPhonemes = 4;
@@ -368,9 +398,7 @@ void AudioFrontend::setMode(Mode mode){
 	}
 
 	if((previousMode == Mode::Speech || previousMode == Mode::Audio) && mode != Mode::Speech && mode != Mode::Audio){
-		if(ServiceLocator::LEDControlInstance){
-			ServiceLocator::LEDControlInstance->stopListen();
-		}
+		setListenLed(false);
 	}
 
 	switch(mode){
@@ -379,9 +407,7 @@ void AudioFrontend::setMode(Mode mode){
 				CMF_LOG(AudioFrontend, LogLevel::Warning, "No audio output buffer defined!");
 			}
 
-			if(ServiceLocator::LEDControlInstance){
-				ServiceLocator::LEDControlInstance->startListen();
-			}
+			setListenLed(true);
 
 			break;
 
@@ -390,11 +416,11 @@ void AudioFrontend::setMode(Mode mode){
 			abort();
 
 		case Mode::Speech:
-			if(ServiceLocator::LEDControlInstance){
-				ServiceLocator::LEDControlInstance->startListen();
-			}
+			setListenLed(true);
 
 			lastRawTranscript.clear();
+			speechReported = false;
+			awaitingUtteranceEnd = false;
 			break;
 
 		case Mode::VAD:
@@ -407,6 +433,8 @@ void AudioFrontend::setMode(Mode mode){
 			// their next loop iteration; once both AtGate bits are set, no work is in flight.
 			xEventGroupClearBits(taskGate, RunBit);
 			xEventGroupWaitBits(taskGate, FeedAtGate | ProcAtGate, pdFALSE, pdTRUE, portMAX_DELAY);
+			// The proc task is parked: the recording is final and nothing writes the recorder any more.
+			capture = nullptr;
 			break;
 	}
 
@@ -438,6 +466,10 @@ void AudioFrontend::setSpeechPhrases(std::span<Phrase> phrases){
 	speechPhrases.assign(AbortPhrases, AbortPhrases + AbortPhrasesNum);
 	speechPhrases.insert(speechPhrases.end(), phrases.begin(), phrases.end());
 
+	// Registering the phrases builds MultiNet's command FST through the same plain-malloc esp-sr libs as the
+	// load, and it stays allocated while listening: keep it out of internal RAM too.
+	const ExtmemFirst window;
+
 	ESP_ERROR_CHECK(esp_mn_commands_clear());
 
 	for(uint8_t i = 1; i <= AbortPhrasesNum; ++i){
@@ -466,6 +498,15 @@ AudioFrontend::PhraseResult AudioFrontend::waitForPhrase(){
 	setMode(Mode::Off);
 	phraseWaiting.store(false);
 	return phraseWaitResult;
+}
+
+void AudioFrontend::setCapture(UtteranceRecorder* recorder){
+	if(currentMode != Mode::Off){
+		CMF_LOG(AudioFrontend, LogLevel::Error, "Cannot attach a recorder while the AFE is running!");
+		return;
+	}
+
+	capture = recorder;
 }
 
 void AudioFrontend::setOutputBuffer(RingbufHandle_t rb){
@@ -507,24 +548,58 @@ void AudioFrontend::waitAtGate(EventBits_t atGateBit){
 	xEventGroupClearBits(taskGate, atGateBit);
 }
 
-void AudioFrontend::loadModel(){
+bool AudioFrontend::loadModel(){
 	if(afe_handle){
 		CMF_LOG(AudioFrontend, LogLevel::Error, "Model already loaded!");
-		return;
+		return true;
 	}
 
 	if(currentMode != Mode::Off){
 		CMF_LOG(AudioFrontend, LogLevel::Error, "Cannot load model while AFE is running!");
-		return;
+		return false;
 	}
 
 	uint32_t startTime = millis();
 
+	bool created = false;
+	{
+		const ExtmemFirst window;
+		created = createModels();
+	}
+	if(!created){
+		// With CONFIG_HEAP_ABORT_WHEN_ALLOCATION_FAILS=y an out-of-memory reboots inside esp-sr instead (M11), so
+		// this is a missing model or a refused config. Nothing stays half-loaded.
+		releaseModels();
+		CMF_LOG(AudioFrontend, LogLevel::Error, "Speech models not loaded");
+		return false;
+	}
+
+	CMF_LOG(AudioFrontend, LogLevel::Debug, "AFE time: %d ms", (int)millis() - (int)startTime);
+
+	const size_t feedBufferLength = (size_t)afe_handle->get_feed_chunksize(afe_data) * afe_handle->get_channel_num(afe_data);
+	CMF_LOG(AudioFrontend, LogLevel::Debug, "feedBuffer size: %zu (FeedBufferSize: %zu)", feedBufferLength, FeedBufferSize);
+	if(feedBufferLength != FeedBufferSize){
+		CMF_LOG(AudioFrontend, LogLevel::Warning, "AFE feed chunk size mismatch: expected %zu, got %zu", FeedBufferSize, feedBufferLength);
+	}
+	return true;
+}
+
+bool AudioFrontend::createModels(){
 	models = esp_srmodel_init("model"); // partition label defined in partitions.csv
+	if(models == nullptr){
+		CMF_LOG(AudioFrontend, LogLevel::Error, "No speech models in the model partition");
+		return false;
+	}
 
 	afe_config = afe_config_init("MM", models, AFE_TYPE_SR, AFE_MODE_HIGH_PERF);
+	if(afe_config == nullptr){
+		CMF_LOG(AudioFrontend, LogLevel::Error, "AFE config refused");
+		return false;
+	}
 	afe_config->wakenet_init = false;
 	afe_config->afe_ringbuf_size = 50;
+	// Covers only the AFE's own buffers. It was already set in #20, whose loads still drained internal RAM: see
+	// ExtmemFirst for the rest.
 	afe_config->memory_alloc_mode = AFE_MEMORY_ALLOC_MORE_PSRAM;
 
 	//Acoustic echo cancellation
@@ -551,30 +626,52 @@ void AudioFrontend::loadModel(){
 	afe_config->agc_target_level_dbfs = -3; //Default
 
 	afe_handle = esp_afe_handle_from_config(afe_config);
+	if(afe_handle == nullptr){
+		CMF_LOG(AudioFrontend, LogLevel::Error, "No AFE for this config");
+		return false;
+	}
 	afe_data = afe_handle->create_from_config(afe_config);
+	if(afe_data == nullptr){
+		CMF_LOG(AudioFrontend, LogLevel::Error, "AFE not created");
+		return false;
+	}
 
 	//Multinet (speech recognition)
 	char* mn_name = esp_srmodel_filter(models, ESP_MN_PREFIX, ESP_MN_ENGLISH);
+	if(mn_name == nullptr){
+		CMF_LOG(AudioFrontend, LogLevel::Error, "No English MultiNet model");
+		return false;
+	}
 	CMF_LOG(AudioFrontend, LogLevel::Info, "multinet:%s", mn_name);
 	multinet_handle = esp_mn_handle_from_name(mn_name);
+	if(multinet_handle == nullptr){
+		CMF_LOG(AudioFrontend, LogLevel::Error, "No MultiNet handle");
+		return false;
+	}
 
 	multinet_data = multinet_handle->create(mn_name, MultinetDuration);
-	multinet_handle->set_det_threshold(multinet_data, MultinetDetThreshold);
+	if(multinet_data == nullptr){
+		CMF_LOG(AudioFrontend, LogLevel::Error, "MultiNet not created");
+		return false;
+	}
+	// esp-sr documents no return value for this; the threshold is a constant inside its 0.0-0.9999 range.
+	(void) multinet_handle->set_det_threshold(multinet_data, MultinetDetThreshold);
 
-	ESP_ERROR_CHECK(esp_mn_commands_alloc(multinet_handle, multinet_data));
-	ESP_ERROR_CHECK(esp_mn_commands_clear());
+	// Runtime, not init (E2): log and refuse the turn instead of ESP_ERROR_CHECK's abort.
+	if(const esp_err_t err = esp_mn_commands_alloc(multinet_handle, multinet_data); err != ESP_OK){
+		CMF_LOG(AudioFrontend, LogLevel::Error, "MultiNet command list: %s", esp_err_to_name(err));
+		return false;
+	}
+	mnCommandsAllocated = true;
+	if(const esp_err_t err = esp_mn_commands_clear(); err != ESP_OK){
+		CMF_LOG(AudioFrontend, LogLevel::Error, "MultiNet command clear: %s", esp_err_to_name(err));
+		return false;
+	}
 	auto err = esp_mn_commands_update();
 	if(err != nullptr){
 		CMF_LOG(AudioFrontend, Error, "%d phrases with errors", err->num);
 	}
-
-	CMF_LOG(AudioFrontend, LogLevel::Debug, "AFE time: %d ms", (int)millis() - (int)startTime);
-
-	const size_t feedBufferLength = (size_t)afe_handle->get_feed_chunksize(afe_data) * afe_handle->get_channel_num(afe_data);
-	CMF_LOG(AudioFrontend, LogLevel::Debug, "feedBuffer size: %zu (FeedBufferSize: %zu)", feedBufferLength, FeedBufferSize);
-	if(feedBufferLength != FeedBufferSize){
-		CMF_LOG(AudioFrontend, LogLevel::Warning, "AFE feed chunk size mismatch: expected %zu, got %zu", FeedBufferSize, feedBufferLength);
-	}
+	return true;
 }
 
 void AudioFrontend::unloadModel(){
@@ -589,19 +686,28 @@ void AudioFrontend::unloadModel(){
 
 	uint32_t startTime = millis();
 
-	ESP_ERROR_CHECK(esp_mn_commands_free());
+	releaseModels();
+
+	CMF_LOG(AudioFrontend, LogLevel::Debug, "unload time: %d ms", (int)millis() - (int)startTime);
+}
+
+void AudioFrontend::releaseModels(){
+	if(mnCommandsAllocated){
+		ESP_ERROR_CHECK_WITHOUT_ABORT(esp_mn_commands_free());
+		mnCommandsAllocated = false;
+	}
 
 	if(multinet_handle && multinet_data){
 		multinet_handle->destroy(multinet_data);
-		multinet_handle = nullptr;
-		multinet_data = nullptr;
 	}
+	multinet_handle = nullptr;
+	multinet_data = nullptr;
 
 	if(afe_handle && afe_data){
 		afe_handle->destroy(afe_data);
-		afe_handle = nullptr;
-		afe_data = nullptr;
 	}
+	afe_handle = nullptr;
+	afe_data = nullptr;
 
 	if(afe_config){
 		afe_config_free(afe_config);
@@ -612,8 +718,6 @@ void AudioFrontend::unloadModel(){
 		esp_srmodel_deinit(models);
 		models = nullptr;
 	}
-
-	CMF_LOG(AudioFrontend, LogLevel::Debug, "unload time: %d ms", (int)millis() - (int)startTime);
 }
 
 #if BB_DEBUG_ASK_BUILD
@@ -740,6 +844,12 @@ void AudioFrontend::processAudio(afe_fetch_result_t* res){
 }
 
 void AudioFrontend::processSpeech(afe_fetch_result_t* res){
+	// With a recorder attached the session reports once; the state leaves Speech right after.
+	if(speechReported) return;
+
+	UtteranceRecorder* recorder = capture.load();
+	if(recorder != nullptr && recordSpeech(res, recorder)) return;
+
 	if(res->vad_cache_size > 0 && res->data_size > 0){
 		int16_t* cache = res->vad_cache;
 		int remaining = res->vad_cache_size;
@@ -756,6 +866,11 @@ void AudioFrontend::processSpeech(afe_fetch_result_t* res){
 		esp_mn_results_t* partial = multinet_handle->get_results(multinet_data);
 		if(partial != nullptr && partial->raw_string[0] != '\0' && lastRawTranscript != partial->raw_string){
 			lastRawTranscript = partial->raw_string;
+		}
+		if(recorder != nullptr && recorder->state() == UtteranceRecorder::State::Done){
+			// The utterance ended before MultiNet decided: decide now instead of waiting out its window.
+			reportFuzzy(fuzzyMatch(lastRawTranscript));
+			multinet_handle->clean(multinet_data);
 		}
 		return;
 	}
@@ -784,22 +899,50 @@ void AudioFrontend::processSpeech(afe_fetch_result_t* res){
 		if(lastRawTranscript.empty()){
 			lastRawTranscript = mn_result->raw_string;
 		}
-		CMF_LOG(AudioFrontend, LogLevel::Info, "timeout, broadcasting transcript: '%s', len: %d", lastRawTranscript.c_str(), (int)lastRawTranscript.length());
+		// Length only: the transcript is the user's speech (S0.5).
+		CMF_LOG(AudioFrontend, LogLevel::Info, "timeout, transcript length %d", (int)lastRawTranscript.length());
 
 		const int fuzzyIndex = fuzzyMatch(lastRawTranscript);
-		if(fuzzyIndex < 0){
-			reportPhrase(false, -1, lastRawTranscript, 0.0f);
-		}else if(fuzzyIndex < AbortPhrasesNum){
-			reportPhrase(true, -1, lastRawTranscript, 0.0f);
+		if(fuzzyIndex < 0 && recorder != nullptr && recorder->state() == UtteranceRecorder::State::Speaking){
+			// No command, and the user is still talking: it's a question, let the recording finish (decisions #1).
+			awaitingUtteranceEnd = true;
 		}else{
-			reportPhrase(true, fuzzyIndex - AbortPhrasesNum, lastRawTranscript, 0.0f);
+			reportFuzzy(fuzzyIndex);
 		}
 
 		multinet_handle->clean(multinet_data);
 	}
 }
 
+bool AudioFrontend::recordSpeech(afe_fetch_result_t* res, UtteranceRecorder* recorder){
+	const size_t cacheBytes = res->vad_cache != nullptr && res->vad_cache_size > 0 ? (size_t) res->vad_cache_size : 0;
+	const size_t dataBytes = res->data != nullptr && res->data_size > 0 ? (size_t) res->data_size : 0;
+	recorder->onFetch(res->vad_state == VAD_SPEECH,
+					  { reinterpret_cast<const uint8_t*>(res->vad_cache), cacheBytes },
+					  { reinterpret_cast<const uint8_t*>(res->data), dataBytes });
+
+	if(!awaitingUtteranceEnd) return false;
+
+	if(recorder->state() == UtteranceRecorder::State::Done){
+		reportPhrase(false, -1, lastRawTranscript, 0.0f);
+	}
+	return true;
+}
+
+void AudioFrontend::reportFuzzy(int fuzzyIndex){
+	if(fuzzyIndex < 0){
+		reportPhrase(false, -1, lastRawTranscript, 0.0f);
+	}else if(fuzzyIndex < AbortPhrasesNum){
+		reportPhrase(true, -1, lastRawTranscript, 0.0f);
+	}else{
+		reportPhrase(true, fuzzyIndex - AbortPhrasesNum, lastRawTranscript, 0.0f);
+	}
+}
+
 void AudioFrontend::reportPhrase(bool recognized, int index, const std::string& transcript, float confidence){
+	if(capture.load() != nullptr){
+		speechReported = true;
+	}
 	onPhrase.broadcast(recognized, index, transcript, confidence);
 	if(phraseWaiting.load()){
 		phraseWaitResult = { recognized, index, transcript, confidence };
@@ -808,6 +951,8 @@ void AudioFrontend::reportPhrase(bool recognized, int index, const std::string& 
 }
 
 int AudioFrontend::fuzzyMatch(const std::string& transcript){
+	// The transcript is the user's speech: logs carry the phrase it was compared with and the scores, never
+	// the transcript itself (S0.5, #22 acceptance item 12).
 	const std::string stripped = stripSpaces(transcript.c_str());
 	if(stripped.empty() || speechPhrases.empty()){
 		return -1;
@@ -835,8 +980,8 @@ int AudioFrontend::fuzzyMatch(const std::string& transcript){
 	}
 
 	if(best < 0){
-		CMF_LOG(AudioFrontend, LogLevel::Info, "Fuzzy match rejected: transcript '%s', best '%s' [%s], core '%s', score %.3f, threshold %.3f, core fit %.3f (max %.3f)",
-			transcript.c_str(), speechPhrases[rawBest].string, speechPhrases[rawBest].phonemes,
+		CMF_LOG(AudioFrontend, LogLevel::Info, "Fuzzy match rejected: best '%s' [%s], core '%s', score %.3f, threshold %.3f, core fit %.3f (max %.3f)",
+			speechPhrases[rawBest].string, speechPhrases[rawBest].phonemes,
 			speechPhrases[rawBest].fuzzyCore ? speechPhrases[rawBest].fuzzyCore : "",
 			scores[rawBest], speechPhrases[rawBest].fuzzyThreshold, coreFits[rawBest], CoreMatchMax);
 		return -1;
@@ -864,15 +1009,15 @@ int AudioFrontend::fuzzyMatch(const std::string& transcript){
 
 	const float bestThreshold = speechPhrases[best].fuzzyThreshold;
 	if(scores[best] >= bestThreshold){
-		CMF_LOG(AudioFrontend, LogLevel::Info, "Fuzzy match rejected: transcript '%s', best '%s' [%s], core '%s', score %.3f above phrase threshold %.3f",
-			transcript.c_str(), speechPhrases[best].string, speechPhrases[best].phonemes,
+		CMF_LOG(AudioFrontend, LogLevel::Info, "Fuzzy match rejected: best '%s' [%s], core '%s', score %.3f above phrase threshold %.3f",
+			speechPhrases[best].string, speechPhrases[best].phonemes,
 			speechPhrases[best].fuzzyCore ? speechPhrases[best].fuzzyCore : "",
 			scores[best], bestThreshold);
 		return -1;
 	}
 
-	CMF_LOG(AudioFrontend, LogLevel::Info, "Fuzzy matched: transcript '%s', phrase '%s' [%s], core '%s', score %.3f, threshold %.3f, core fit %.3f (max %.3f)",
-		transcript.c_str(), speechPhrases[best].string, speechPhrases[best].phonemes,
+	CMF_LOG(AudioFrontend, LogLevel::Info, "Fuzzy matched: phrase '%s' [%s], core '%s', score %.3f, threshold %.3f, core fit %.3f (max %.3f)",
+		speechPhrases[best].string, speechPhrases[best].phonemes,
 		speechPhrases[best].fuzzyCore ? speechPhrases[best].fuzzyCore : "",
 		scores[best], bestThreshold, coreFits[best], CoreMatchMax);
 	return best;

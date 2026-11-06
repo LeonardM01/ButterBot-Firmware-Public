@@ -408,7 +408,9 @@ private:
 	}
 
 	void startPlayback(){
-		audio.play(&generator, std::make_unique<StreamingPcmSource>(stream));
+		// Queued, not play(): a filler line that is still speaking finishes first (decisions #5). The ring keeps
+		// filling meanwhile. Audio::stop() drops the queued reply too, which ends the turn as aborted.
+		audio.enqueue(&generator, std::make_unique<StreamingPcmSource>(stream));
 		playing = true;
 		result.firstAudioMs = msSince(tUploaded);
 		notify(AskPhase::Playing);

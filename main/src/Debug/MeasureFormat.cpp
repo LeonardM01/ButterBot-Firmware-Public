@@ -50,3 +50,7 @@ void formatAfeMeasure(char* out, size_t cap, const AfeGlitchMeter::Stats& stats)
 			 stats.micOverflows, stats.micLostMs, stats.micReadErrors,
 			 stats.afeBacklogMaxMs, stats.afeOverflows, stats.fetchErrors);
 }
+
+void formatStackMeasure(char* out, size_t cap, const char* task, uint32_t sizeBytes, uint32_t minFreeBytes){
+	snprintf(out, cap, "BBMEASURE stack task=%s size=%" PRIu32 " min_free=%" PRIu32, task, sizeBytes, minFreeBytes);
+}
