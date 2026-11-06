@@ -13,6 +13,8 @@
 #include "Audio/SpeechAudioGen.h"
 #include "Audio/MicInput.h"
 #include "Services/WiFi/WiFiService.h"
+#include "Audio/VoiceCapture.h"
+#include "Net/AskWorker.h"
 
 class ServiceLocator{
 public:
@@ -38,6 +40,12 @@ public:
 
 	// Owns the radio for the whole runtime: created once at boot, never deleted (see WiFiService.h).
 	inline static WiFiService* WiFiServiceInstance = nullptr;
+
+	// Voice turn (#22): the PSRAM capture buffer and the ask worker, both created once at boot and kept.
+	// Either may be null if its allocation failed; the voice turn then falls back to its spoken lines.
+	inline static std::unique_ptr<VoiceCapture> VoiceCaptureInstance = nullptr;
+
+	inline static std::unique_ptr<AskWorker> AskWorkerInstance = nullptr;
 };
 
 #endif //BUTTERBOT_FIRMWARE_SERVICELOCATOR_H
