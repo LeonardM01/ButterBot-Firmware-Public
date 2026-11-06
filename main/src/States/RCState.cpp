@@ -9,6 +9,8 @@
 #include "Audio/AudioFrontend.h"
 #include "Services/Com.h"
 #include "Util/WiFiStation.h"
+#include "Services/WiFi/WiFiService.h"
+#include "Net/AskClient.h"
 #include "IdleState.h"
 #include "Util/Feed.h"
 #include "Services/LEDModuleControl.h"
@@ -35,9 +37,8 @@ RCState::RCState(BBStateMachine* sm) : State(sm){
 	sm->bindState(com->OnDriveData, this, &RCState::onDriveData);
 	sm->bindState(com->OnConnStatus, this, &RCState::onBTDisconnect);
 
-	wifi = newObject<WiFi>(sm);
-	if(wifi == nullptr){
-		CMF_LOG(RCState, Warning, "WiFi is nullptr in postInitProperties.");
+	if(ServiceLocator::WiFiServiceInstance == nullptr){
+		CMF_LOG(RCState, Warning, "WiFiService is nullptr in postInitProperties.");
 		return;
 	}
 
@@ -46,7 +47,13 @@ RCState::RCState(BBStateMachine* sm) : State(sm){
 		return;
 	}
 
-	wifiSta = newObject<WiFiStation>(sm, *wifi, ServiceLocator::ControllerStateInstance->getSSID(), ServiceLocator::ControllerStateInstance->getPassword());
+	// RC mode has priority over a conversation: stop any /v1/ask turn before the radio leaves the home network.
+	AskClient::abortInFlight();
+
+	wifiService = ServiceLocator::WiFiServiceInstance;
+	WiFi* wifi = wifiService->useControllerProfile();
+
+	wifiSta = newObject<WiFiStation>(sm, wifi, ServiceLocator::ControllerStateInstance->getSSID(), ServiceLocator::ControllerStateInstance->getPassword());
 
 	sm->bindState(wifiSta->OnStationEvent, this, &RCState::onWifiDisconnect);
 
@@ -62,7 +69,10 @@ RCState::~RCState(){
 
 	delete *feed;
 	delete *wifiSta;
-	delete *wifi;
+
+	if(wifiService != nullptr){
+		wifiService->useHomeProfile();
+	}
 }
 
 int64_t RCState::getDynamicTickInterval() const noexcept{

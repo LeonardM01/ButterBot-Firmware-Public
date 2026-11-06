@@ -66,13 +66,24 @@ included in a commit or pull request.
 ## Flash budget
 
 The 16 MB flash is fully partitioned, so new features (Wi-Fi, TLS, HTTP client) must fit in
-the `factory` app partition (8640 KB). Measured with ESP-IDF 5.5.3:
+the `factory` app partition (8640 KB = 8,847,360 B). Measured with ESP-IDF 5.5.3 (`idf.py build`):
 
 | Build | App image | Free in `factory` |
 |---|---|---|
 | Upstream config | 8,627,632 B | 214 KB (2%) |
-| Current config: max log level Info, silent assertions | 8,415,088 B | 421 KB (5%) |
-| Current config + `CONFIG_COMPILER_OPTIMIZATION_SIZE` (`-Os`) | 8,151,520 B | 680 KB (8%) |
+| Max log level Info, silent assertions (before Wi-Fi) | 8,415,088 B | 421 KB (5%) |
+| Release: Wi-Fi service, WPA3-SAE (no SAE-PK), placeholder `secrets.h` | 8,464,688 B | 382,672 B, 374 KB (4%) |
+| Measurement build: `BB_DEBUG_ASK 1`, `http://` dev URL | 8,620,352 B | 227,008 B, 222 KB (3%) |
+| Measurement build against an `https://` URL (full CA bundle) | 8,691,216 B | 156,144 B, 152 KB (2%) |
+| Before Wi-Fi + `CONFIG_COMPILER_OPTIMIZATION_SIZE` (`-Os`) | 8,151,520 B | 680 KB (8%) |
+
+The release image doesn't contain the `/v1/ask` client yet: only the measurement build's debug
+turn calls it, so the linker drops esp_http_client, the mbedTLS TLS client and the CA bundle.
+The measurement build's 155 KB over release is mostly that stack; the debug turn's own code
+(`DebugAsk`, `DebugAskState`, `AfeGlitchMeter`, `MeasureFormat`) is about 14 KB. Over `https://`
+the full ESP-IDF CA bundle adds another 69 KB, which pinning the two ISRG roots (#24) gets back.
+So a release with the voice turn over HTTPS should land near the `https://` row, less the debug
+turn's 14 KB and plus the voice turn's own code.
 
 Debug-level log calls are compiled out (they never print at the default Info level), and
 failed assertions abort without printing file and line.

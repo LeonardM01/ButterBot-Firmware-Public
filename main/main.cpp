@@ -58,6 +58,7 @@
 #include "Services/ObjDet.h"
 #include <Phrases.h>
 #include "Audio/SpeechAudioSource.h"
+#include "Net/AskClient.h"
 #include "Util/EfuseMeta.h"
 #include "JigHWTest/JigHWTest.h"
 #include "Services/GasConfigureService.h"
@@ -94,6 +95,13 @@ protected:
 		esp_log_level_set("FaceDet", ESP_LOG_NONE);
 		esp_log_level_set("Time", ESP_LOG_NONE);
 
+		// One Info summary line per /v1/ask turn.
+		esp_log_level_set("AskClient", ESP_LOG_INFO);
+		// esp_http_client warns on every expired poll while the ask client waits for the reply.
+		esp_log_level_set("HTTP_CLIENT", ESP_LOG_ERROR);
+
+		AskClient::logSecurityPosture();
+
 
 		esp_err_t ret = nvs_flash_init();
 		if(ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND){
@@ -107,6 +115,15 @@ protected:
 			return;
 		}
 
+		// A panic restarts only the CPU (RTC_SW_CPU_RST); GPIO interrupt enables from the crashed run
+		// survive it. A stale level interrupt with no handler yet then storms as soon as the ISR service
+		// is installed and the interrupt watchdog trips, looping forever. Start from a clean slate; this
+		// touches only the interrupt-enable bits, not pin levels (PIN_PWDN keeps the robot powered).
+		for(int pin = 0; pin < GPIO_NUM_MAX; pin++){
+			if(GPIO_IS_VALID_GPIO(pin)){
+				ESP_ERROR_CHECK_WITHOUT_ABORT(gpio_intr_disable(static_cast<gpio_num_t>(pin)));
+			}
+		}
 		gpio_install_isr_service(ESP_INTR_FLAG_IRAM);
 
 		if(JigHWTest::checkJig()){
@@ -307,6 +324,9 @@ protected:
 		ServiceLocator::ScenarioRoutineServiceInstance = std::make_unique<ScenarioRoutineService>();
 
 		ServiceLocator::ControllerStateInstance = std::make_unique<ControllerState>();
+
+		// Joins home Wi-Fi in the background; RC mode borrows the same radio.
+		ServiceLocator::WiFiServiceInstance = new WiFiService();
 
 		EventBag* eventBag = registerService<EventBag>();
 

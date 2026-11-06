@@ -1,18 +1,19 @@
 #include "WiFiStation.h"
 #include <Periphery/WiFi.h>
+#include "Services/WiFi/WiFiCredentials.h"
 
 DEFINE_LOG(WiFiStation)
 
 WiFiStation::WiFiStation(WiFi* wifi, const char* ssid, const char* password) noexcept : hysteresis({0, 20, 40, 60, 80}, 1), wifi(wifi){
-	memcpy(SSID, ssid, sizeof(RCData::SSID));
-	memcpy(this->password, password, sizeof(RCData::password));
+	WiFiCredentials::copyString(SSID, sizeof(SSID), ssid, sizeof(RCData::SSID));
+	WiFiCredentials::copyString(this->password, sizeof(this->password), password, sizeof(RCData::password));
 
     if(wifi == nullptr){
     	CMF_LOG(WiFiStation, Warning, "Wifi is nullptr in constructor.");
         return;
     }
 
-    wifi->startStation();
+    // The station is already running: WiFiService starts it at boot and lends it to RC mode.
 
     wifi->OnScanDone.bind(this, &WiFiStation::onScanDone);
     wifi->OnStationConnected.bind(this, &WiFiStation::onConnect);
@@ -104,7 +105,7 @@ void WiFiStation::onScanDone(uint32_t status, uint8_t number, uint8_t id) noexce
     state = State::Connecting;
     connectTries = 0;
 
-	CMF_LOG(WiFiStation, LogLevel::Info, "Attempting connect on SSID: %s\n", SSID);
+	CMF_LOG(WiFiStation, LogLevel::Info, "Attempting connect to the controller network.");
     wifi->setTargetParameters(SSID, password);
     wifi->connect();
 }

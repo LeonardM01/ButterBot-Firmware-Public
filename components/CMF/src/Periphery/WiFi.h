@@ -20,6 +20,12 @@ class WiFi : public Object{
     GENERATED_BODY(WiFi, Object, void)
 
 public:
+    // How the station gets its IPv4 address.
+    enum class StationAddressing : uint8_t {
+        Static11, // fixed 11.0.0.2/24, gateway 11.0.0.1 (the RC controller network)
+        Dhcp,     // leased by DHCP; posts IP_EVENT_STA_GOT_IP
+    };
+
     // STATION EVENTS
 #ifdef CONFIG_CMF_WIFI_STA_SUPPORT
     DECLARE_EVENT(ScanDoneEvent, WiFi, uint32_t, uint8_t, uint8_t);
@@ -71,7 +77,9 @@ public:
 
     // STATION FUNCTIONS
 #ifdef CONFIG_CMF_WIFI_STA_SUPPORT
-	void startStation() noexcept;
+	// storage: WIFI_STORAGE_RAM keeps every esp_wifi_set_config out of NVS.
+	void startStation(StationAddressing addressing = StationAddressing::Static11, wifi_storage_t storage = WIFI_STORAGE_FLASH) noexcept;
+	esp_netif_t* getNetif() const noexcept;
 
     void resetIPInfo() const noexcept;
     void connect() const noexcept;
@@ -91,7 +99,7 @@ private:
 
 private:
     void onNativeEvent(uint32_t id, void* data) noexcept;
-    void createNetif() noexcept;
+    void createNetif(StationAddressing addressing = StationAddressing::Static11) noexcept;
 };
 
 #endif //WIFI_H
