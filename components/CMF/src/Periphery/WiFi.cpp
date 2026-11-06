@@ -212,8 +212,15 @@ void WiFi::setTargetParameters(const std::string& ssid, const std::string& passw
 
     wifi_config_t cfg_wifi = {};
 
-    strcpy((char*) cfg_wifi.sta.ssid, ssid.c_str());
-    strcpy((char*) cfg_wifi.sta.password, password.c_str());
+    // Bounded copies: a 32-byte SSID fills the field with no terminator (the driver accepts that); longer values
+    // are rejected rather than overflowing into the next field.
+    if(ssid.size() > sizeof(cfg_wifi.sta.ssid) || password.size() > sizeof(cfg_wifi.sta.password)) {
+        CMF_LOG(WiFi, LogLevel::Error, "WiFi station SSID or password too long, not applied.");
+        return;
+    }
+
+    memcpy(cfg_wifi.sta.ssid, ssid.data(), ssid.size());
+    memcpy(cfg_wifi.sta.password, password.data(), password.size());
 
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &cfg_wifi));
 }
