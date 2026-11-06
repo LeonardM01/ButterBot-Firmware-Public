@@ -95,6 +95,11 @@ protected:
 		esp_log_level_set("FaceDet", ESP_LOG_NONE);
 		esp_log_level_set("Time", ESP_LOG_NONE);
 
+		// One Info summary line per /v1/ask turn.
+		esp_log_level_set("AskClient", ESP_LOG_INFO);
+		// esp_http_client warns on every expired poll while the ask client waits for the reply.
+		esp_log_level_set("HTTP_CLIENT", ESP_LOG_ERROR);
+
 		AskClient::logSecurityPosture();
 
 

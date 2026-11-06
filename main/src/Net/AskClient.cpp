@@ -70,10 +70,6 @@ void warnInsecure(){
 }
 
 AskClient::AskClient(Audio& audio, AudioGenerator& generator, AskConfig config) : audio(audio), generator(generator), config(config){
-	// The summary line per turn is Info; the runtime default is WARN (main.cpp).
-	esp_log_level_set(AskClient_log.Tag.c_str(), ESP_LOG_INFO);
-	// esp_http_client warns on every expired poll while we wait for the reply.
-	esp_log_level_set("HTTP_CLIENT", ESP_LOG_ERROR);
 }
 
 void AskClient::abort(){
