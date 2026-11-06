@@ -227,7 +227,7 @@ No measurement build here: this tests the shipped voice turn against the laptop 
 
 | # | Do | Expect | Grep |
 |---|---|---|---|
-| 4 | Ask a built-in command ("tell me a joke"). Repeat with the router off. | The local routine, both times. No upload | that turn has `at=idle`, `at=loaded`, `at=after` and no `at=network`; no `Listen result` |
+| 4 | Ask a built-in command ("tell me a joke"). Repeat with the router off. | The local routine, both times. No upload | that turn has `at=idle`, `at=loaded`, `at=listening`, `at=unloaded`, `at=after` and no `at=network`; no `Listen result` |
 | 5 | Ask a question ("what is the capital of France"). | Filler line with fast LED blink. The reply starts before the download ends (`first audio` < `down … ms`). Back to Idle | `ask: … question handed over`, `AskClient: ask: HTTP 200`, `AskWorker: stack min_free` |
 | 6 | Ask, then press the power button while the filler or reply plays. Again with the controller's ShutUp, and once while it is still connecting. | Stops at once and says "OK"/"Got it". The robot is back in Idle within about 0.5 s (connecting: up to the 5 s budget) | `AskClient: ask: … aborted` or `HTTP -1`; no reply after the abort phrase |
 | 6b | Ask, then enter RC from the controller while it thinks. | Silent stop, then RC mode | `AskWorker: stack min_free`, then `WiFiService`'s switch to the controller network |
@@ -241,11 +241,11 @@ No measurement build here: this tests the shipped voice turn against the laptop 
    ```sh
    L=~/butterbot-logs/voice.log
    grep -a "VoiceTurn: heap" $L                       # all phases of every turn
-   grep -a "VoiceTurn: heap turn=.* at=idle" $L       # int_free/int_largest stay within ~600 B of turn 1
-   grep -a "at=loaded" $L                             # int_min well above the 59-319 B of #20
-   grep -a "at=network" $L                            # int_free about idle - 2 KB
-   grep -a "AskWorker: stack min_free" $L             # > 4096
-   grep -aE "ALLOC FAIL|abort\(\)|Guru Meditation|rst:0x|Not loading the speech models" $L   # nothing after boot
+   grep -a "VoiceTurn: heap turn=.* at=idle" $L       # within ~600 B of turn 1, above guard_free/guard_largest
+   grep -a "at=loaded" $L                             # int_min about 8 KB under idle (32.4-32.9 KB measured)
+   grep -aE "at=(listening|unloaded|network)" $L      # the first whose int_min drops to a few KB places the dip
+   grep -a "AskWorker: stack min_free" $L             # > 4096 (9,532 measured over http)
+   grep -aE "ALLOC FAIL|abort\(\)|Guru Meditation|rst:0x|Not loading the speech models|Not listening" $L   # nothing after boot
    ```
 
    What each value should look like, and why, is in `docs/voice-turn-memory.md`.
