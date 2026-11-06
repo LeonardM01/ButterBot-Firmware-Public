@@ -1,7 +1,7 @@
 #include "StreamingPcmSource.h"
 #include <cstring>
 #include <esp_heap_caps.h>
-#include <esp_timer.h>
+#include "Util/Elapsed.h"
 
 namespace {
 /** Longest single block in write(), so cancel and consumer loss are noticed quickly. */
@@ -96,10 +96,7 @@ void StreamingPcmSource::open(){
 }
 
 void StreamingPcmSource::close(){
-	if(starving){
-		stream->starvedUs += (uint32_t) (esp_timer_get_time() - starveStartUs);
-		starving = false;
-	}
+	endStarvation();
 	stream->gone = true;
 }
 
@@ -110,10 +107,7 @@ size_t StreamingPcmSource::getData(uint8_t* buffer, size_t bytes){
 
 	const size_t n = stream->read(buffer, bytes, pdMS_TO_TICKS(ReadWaitMs));
 	if(n > 0){
-		if(starving){
-			stream->starvedUs += (uint32_t) (esp_timer_get_time() - starveStartUs);
-			starving = false;
-		}
+		endStarvation();
 		started = true;
 		return n;
 	}
@@ -125,11 +119,17 @@ size_t StreamingPcmSource::getData(uint8_t* buffer, size_t bytes){
 	// The producer is behind. Play silence rather than returning 0, which would stop Audio.
 	if(started && !starving){
 		starving = true;
-		starveStartUs = esp_timer_get_time();
+		starveStartUs = nowUs();
 		stream->underruns++;
 	}
 	std::memset(buffer, 0, bytes);
 	return bytes;
+}
+
+void StreamingPcmSource::endStarvation(){
+	if(!starving) return;
+	stream->starvedUs += (uint32_t) (nowUs() - starveStartUs);
+	starving = false;
 }
 
 StreamingPcmSource::operator bool() const{

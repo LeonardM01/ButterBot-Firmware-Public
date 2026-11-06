@@ -103,6 +103,9 @@ private:
 	bool started = false;    // real audio has been played
 	bool starving = false;   // currently filling silence
 	int64_t starveStartUs = 0;
+
+	/** Adds the current run of inserted silence, if any, to the stream's starved time. */
+	void endStarvation();
 };
 
 #endif //BUTTERBOT_FIRMWARE_STREAMINGPCMSOURCE_H
