@@ -93,11 +93,11 @@ values from the robot are in.
 | Build | `secrets.h` | App image | Free in `factory` |
 |---|---|---|---|
 | Dev (acceptance against the laptop) | `http://` URL, `BB_DEV_INSECURE 1`, `BB_DEBUG_ASK 0` | 8,626,288 | **221,072 (2.5 %)** |
-| Release-like | `https://` URL, `BB_DEV_INSECURE 0`, `BB_DEBUG_ASK 0` | 8,697,120 | **150,240 (1.7 %)** |
-| Measurement | `http://`, `BB_DEV_INSECURE 1`, `BB_DEBUG_ASK 1` | 8,640,224 | 207,136 (2.3 %) |
+| Release-like | `https://` URL, `BB_DEV_INSECURE 0`, `BB_DEBUG_ASK 0` | 8,697,168 | **150,192 (1.7 %)** |
+| Measurement | `http://`, `BB_DEV_INSECURE 1`, `BB_DEBUG_ASK 1` | 8,640,224 | 207,136 (2.3 %), built one commit earlier: tens of bytes less than HEAD |
 
 The release-like image links the ask client, `esp_http_client`, the mbedTLS TLS client and the full ESP-IDF CA
-bundle. Pinning the ISRG roots (#24) should win back most of the 70,896 between the dev and release images.
+bundle. Pinning the ISRG roots (#24) should win back most of the 70,880 between the dev and release images.
 The flash is fully partitioned, so no partition can grow.
 
 **SPIFFS** (`storage`, 212 KiB = 217,088 B): 27 files, 74,808 B of content. #22 adds nothing. The filler,
@@ -145,4 +145,5 @@ and copy the `VoiceTurn: heap at=online` line and turn 1's `at=idle` line here. 
 **est.** idle values above with them, and recompute the guard headroom.
 
 Static RAM (M12, release-like build against the `feat/22-ask-anything` base): DIRAM 155,879 → 156,731 B
-(+852 B, mostly `esp_http_client` and mbedTLS statics that are now linked). App image +232,288 B.
+(+852 B, mostly `esp_http_client` and mbedTLS statics that are now linked). App image 8,464,832 → 8,697,168 B
+(+232,336 B; the base release didn't link the ask client at all).
