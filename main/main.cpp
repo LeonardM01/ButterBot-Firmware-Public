@@ -99,6 +99,9 @@ protected:
 		esp_log_level_set("AskClient", ESP_LOG_INFO);
 		esp_log_level_set("AskWorker", ESP_LOG_INFO);
 		esp_log_level_set("VoiceTurn", ESP_LOG_INFO);
+		// One line per voice turn outcome (sizes and outcomes only, never the transcript).
+		esp_log_level_set("ListenState", ESP_LOG_INFO);
+		esp_log_level_set("AskState", ESP_LOG_INFO);
 		// esp_http_client warns on every expired poll while the ask client waits for the reply.
 		esp_log_level_set("HTTP_CLIENT", ESP_LOG_ERROR);
 
