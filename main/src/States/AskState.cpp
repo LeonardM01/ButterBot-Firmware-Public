@@ -149,6 +149,8 @@ void AskState::onWorkerDone(){
 
 	const AskWorker& worker = *ServiceLocator::AskWorkerInstance;
 	VoiceTurnHeap::log(VoiceTurnHeap::Point::Network, worker.phaseHeap().connected);
+	VoiceTurnHeap::log(VoiceTurnHeap::Point::Playing, worker.phaseHeap().playing);
+	VoiceTurnHeap::log(VoiceTurnHeap::Point::Downloaded, worker.phaseHeap().downloaded);
 	networkLogged = true;
 
 	if(cancelled) return; // the abort phrase is already playing

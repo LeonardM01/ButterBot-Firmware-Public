@@ -20,8 +20,16 @@ const char* name(VoiceTurnHeap::Point point){
 			return "idle";
 		case VoiceTurnHeap::Point::Loaded:
 			return "loaded";
+		case VoiceTurnHeap::Point::Listening:
+			return "listening";
+		case VoiceTurnHeap::Point::Unloaded:
+			return "unloaded";
 		case VoiceTurnHeap::Point::Network:
 			return "network";
+		case VoiceTurnHeap::Point::Playing:
+			return "playing";
+		case VoiceTurnHeap::Point::Downloaded:
+			return "downloaded";
 		case VoiceTurnHeap::Point::AfterTurn:
 			return "after";
 	}

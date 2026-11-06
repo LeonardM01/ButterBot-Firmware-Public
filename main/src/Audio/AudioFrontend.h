@@ -55,7 +55,8 @@ public:
 	};
 
 	/**
-	 * Clears previous phrases and replaces them with specified phrases.
+	 * Clears previous phrases and replaces them with specified phrases. Like loadModel(), plain malloc() goes
+	 * to PSRAM first meanwhile.
 	 */
 	void setSpeechPhrases(std::span<Phrase> phrases);
 

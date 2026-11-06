@@ -269,6 +269,7 @@ ListenState::ListenState(BBStateMachine* sm) : State(sm){
             audioFrontend->setCapture(&capture->recorder());
         }
         audioFrontend->setMode(AudioFrontend::Mode::Speech);
+        VoiceTurnHeap::mark(VoiceTurnHeap::Point::Listening);
     }
 }
 
@@ -279,6 +280,9 @@ ListenState::~ListenState(){
     if(AudioFrontend* audioFrontend = app->getService<AudioFrontend>()){
         audioFrontend->setMode(AudioFrontend::Mode::Off);
 		audioFrontend->unloadModel();
+    }
+    if(!refused){
+        VoiceTurnHeap::mark(VoiceTurnHeap::Point::Unloaded);
     }
 
     if(refused){

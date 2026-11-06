@@ -25,7 +25,8 @@ namespace {
 	 * must-be-internal allocation (a FreeRTOS mutex) then fails and reboots. afe_config_t::memory_alloc_mode
 	 * steers only the AFE's own buffers and MultiNet has no such knob, so they can't do this.
 	 *
-	 * It is global for ~770 ms: other tasks' plain malloc() lands in PSRAM too. heap_caps_malloc_default()
+	 * Used by loadModel() and setSpeechPhrases(). It is global for ~770 ms of load plus the phrase registration:
+ * other tasks' plain malloc() lands in PSRAM too. heap_caps_malloc_default()
 	 * already falls back to PSRAM once internal RAM is short, which every #20 load caused, so no correct code
 	 * relies on plain malloc() for DMA, ISR or cache-off memory; IDF drivers and FreeRTOS ask for caps
 	 * explicitly. See docs/voice-turn-memory.md, "The extmem window".
@@ -464,6 +465,10 @@ void AudioFrontend::setSpeechPhrases(std::span<Phrase> phrases){
 	// speechPhrases mirrors MultiNet registration order: aborts first, then caller phrases.
 	speechPhrases.assign(AbortPhrases, AbortPhrases + AbortPhrasesNum);
 	speechPhrases.insert(speechPhrases.end(), phrases.begin(), phrases.end());
+
+	// Registering the phrases builds MultiNet's command FST through the same plain-malloc esp-sr libs as the
+	// load, and it stays allocated while listening: keep it out of internal RAM too.
+	const ExtmemFirst window;
 
 	ESP_ERROR_CHECK(esp_mn_commands_clear());
 
