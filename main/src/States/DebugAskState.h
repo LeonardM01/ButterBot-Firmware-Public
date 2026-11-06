@@ -28,7 +28,7 @@ public:
 
 private:
 	static constexpr int64_t PollMs = 100;
-	/** Longest the destructor blocks the state machine if the state is ever left before cleanup. */
+	/** How often the destructor warns while it waits out a worker that is still running. */
 	static constexpr uint32_t ExitWaitMs = 2000;
 
 	bool rcRequested = false;

@@ -2,6 +2,7 @@
 #include <atomic>
 #include <esp_heap_caps.h>
 #include <Log/Log.h>
+#include "VoiceTurnGate.h"
 
 DEFINE_LOG(VoiceTurn)
 
@@ -49,10 +50,6 @@ HeapSnapshot VoiceTurnHeap::beginTurn(){
 	return idle;
 }
 
-bool VoiceTurnHeap::modelLoadAllowed(const HeapSnapshot& idle){
-	return idle.intFree >= ModelLoadMinIntFree && idle.intLargest >= ModelLoadMinIntLargest;
-}
-
 void VoiceTurnHeap::log(Point point, const HeapSnapshot& s){
 	if(!s.taken){
 		CMF_LOG(VoiceTurn, LogLevel::Info, "heap turn=%u at=%s not_reached", (unsigned) turnNumber, name(point));
@@ -80,5 +77,5 @@ void VoiceTurnHeap::logOnline(){
 	CMF_LOG(VoiceTurn, LogLevel::Info, "heap at=online int_free=%u int_min=%u int_largest=%u psram_free=%u psram_largest=%u "
 			"guard_free=%u guard_largest=%u",
 			(unsigned) s.intFree, (unsigned) s.intMin, (unsigned) s.intLargest, (unsigned) s.psFree, (unsigned) s.psLargest,
-			(unsigned) ModelLoadMinIntFree, (unsigned) ModelLoadMinIntLargest);
+			(unsigned) VoiceTurnGate::MinIntFree, (unsigned) VoiceTurnGate::MinIntLargest);
 }

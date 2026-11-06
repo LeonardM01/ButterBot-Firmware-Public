@@ -38,9 +38,7 @@ DebugAskState::DebugAskState(BBStateMachine* sm) : State(sm){
 DebugAskState::~DebugAskState(){
 	// Normally the turn has cleaned up already: tick() leaves only once it has. This is the backstop for any
 	// other way out, so the next state never finds a reply still playing behind its back.
-	if(!DebugAsk::stop(ExitWaitMs)){
-		CMF_LOG(DebugAskState, LogLevel::Warning, "ask worker still busy after %d ms", (int) ExitWaitMs);
-	}
+	DebugAsk::stop(ExitWaitMs);
 	if(ServiceLocator::LEDControlInstance){
 		ServiceLocator::LEDControlInstance->stopListen();
 	}

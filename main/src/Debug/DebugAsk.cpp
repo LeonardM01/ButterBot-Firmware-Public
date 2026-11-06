@@ -104,6 +104,12 @@ void prepareAndSubmit(){
 		finish();
 		return;
 	}
+	if(worker->busy()){
+		// It still reads the capture buffer (C7). Only this task submits, so it stays idle once seen idle here.
+		printf("BBMEASURE turn error=worker_busy\n");
+		finish();
+		return;
+	}
 
 	const int64_t tLoad = nowUs();
 	if(!afe->loadModel()){ // AFE + MultiNet, as ListenState does
@@ -211,12 +217,16 @@ void DebugAsk::abort(){
 	AskClient::abortInFlight();
 }
 
-bool DebugAsk::stop(uint32_t timeoutMs){
-	if(turn.step == Step::Idle) return true;
+void DebugAsk::stop(uint32_t warnEveryMs){
+	if(turn.step == Step::Idle) return;
 	abort();
-	const bool idle = turn.step != Step::Asking || ServiceLocator::AskWorkerInstance->waitIdle(timeoutMs);
+	// The worker reads the capture buffer until it is idle: wait it out before ending the turn (C7).
+	if(turn.step == Step::Asking){
+		while(!ServiceLocator::AskWorkerInstance->waitIdle(warnEveryMs)){
+			CMF_LOG(DebugAsk, LogLevel::Warning, "ask worker still busy, waiting another %u ms", (unsigned) warnEveryMs);
+		}
+	}
 	finish();
-	return idle;
 }
 
 #endif

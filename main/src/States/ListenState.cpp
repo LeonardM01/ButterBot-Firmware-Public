@@ -32,6 +32,7 @@
 #include "Routines/IRActionRoutine.h"
 #include "ScenarioRoutineMappings.h"
 #include "Net/AskLines.h"
+#include "Util/VoiceTurnGate.h"
 #include "Util/VoiceTurnHeap.h"
 
 DEFINE_LOG(ListenState)
@@ -195,16 +196,27 @@ ListenState::ListenState(BBStateMachine* sm) : State(sm){
 
     const Application* app = ApplicationStatics::getApplication();
 
-    // Internal-RAM guard (decisions #9, docs/voice-turn-memory.md): loading AFE + MultiNet with too little
-    // internal RAM reboots the robot, so refuse and say so instead. Under the budget this never fires.
+    // Two refusals (VoiceTurnGate), both spoken as "thoughts got lost" by the destructor, then Idle:
+    // - the ask worker still reads the capture buffer, so recording now would overwrite its upload (C7). Only
+    //   this task can make the worker busy again (submit()), so the check holds for the whole constructor;
+    // - too little internal RAM for AFE + MultiNet, whose load would reboot the robot (decisions #9).
+    const AskWorker* worker = ServiceLocator::AskWorkerInstance.get();
     const HeapSnapshot idle = VoiceTurnHeap::beginTurn();
-    if(!VoiceTurnHeap::modelLoadAllowed(idle)){
-        CMF_LOG(ListenState, LogLevel::Warning, "Not loading the speech models: internal RAM free %u B (need %u), largest block %u B (need %u)",
-                (unsigned) idle.intFree, (unsigned) VoiceTurnHeap::ModelLoadMinIntFree,
-                (unsigned) idle.intLargest, (unsigned) VoiceTurnHeap::ModelLoadMinIntLargest);
-        refused = true;
-        sm->transitionTo<IdleState>();
-        return;
+    switch(VoiceTurnGate::check(worker != nullptr && worker->busy(), idle.intFree, idle.intLargest)){
+        case VoiceTurnGate::Verdict::Go:
+            break;
+        case VoiceTurnGate::Verdict::AskStillRunning:
+            CMF_LOG(ListenState, LogLevel::Warning, "Not listening: the last question is still being asked");
+            refused = true;
+            sm->transitionTo<IdleState>();
+            return;
+        case VoiceTurnGate::Verdict::LowInternalRam:
+            CMF_LOG(ListenState, LogLevel::Warning, "Not loading the speech models: internal RAM free %u B (need %u), largest block %u B (need %u)",
+                    (unsigned) idle.intFree, (unsigned) VoiceTurnGate::MinIntFree,
+                    (unsigned) idle.intLargest, (unsigned) VoiceTurnGate::MinIntLargest);
+            refused = true;
+            sm->transitionTo<IdleState>();
+            return;
     }
 
     buildAndPlayIntro(app);
@@ -271,7 +283,8 @@ ListenState::ListenState(BBStateMachine* sm) : State(sm){
         audio->waitEnd(portMAX_DELAY);
 
         sm->bindState(audioFrontend->onPhrase, this, &ListenState::onPhrase);
-        // Record the question too, into the boot-time buffer (#22). setMode(Off) detaches it.
+        // Record the question too, into the boot-time buffer (#22); the worker is idle (checked above).
+        // setMode(Off) detaches it.
         if(VoiceCapture* capture = ServiceLocator::VoiceCaptureInstance.get()){
             capture->begin();
             audioFrontend->setCapture(&capture->recorder());

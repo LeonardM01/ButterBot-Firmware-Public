@@ -6,8 +6,8 @@
 #include "HeapSnapshot.h"
 
 /**
- * Internal-RAM budget of a voice turn (docs/voice-turn-memory.md): the guard before the AFE + MultiNet load,
- * and one compact Info line per turn phase, tag `VoiceTurn`:
+ * Internal-RAM budget of a voice turn (docs/voice-turn-memory.md): one compact Info line per turn phase, tag
+ * `VoiceTurn`. The guard before the AFE + MultiNet load is VoiceTurnGate.
  *
  *   heap turn=N at=<idle|loaded|network|after> int_free= int_min= int_largest= psram_free= psram_largest=
  *
@@ -15,15 +15,6 @@
  * tokens, transcripts or reply text (S0.5). Called from the state machine task, except logOnline().
  */
 namespace VoiceTurnHeap {
-
-/**
- * The load needs this much internal RAM free and in one block, or ListenState refuses it (decisions #9).
- * Free: the largest load seen on the robot took 28,444 B (turn2.log, 28,703 -> low 259) and a load from
- * 27,907 B rebooted (turn5.log); 30,720 B leaves 2,276 B over that load and 2,813 B over the crash.
- * Largest: loads succeeded from a 7,680 B largest block (turn2.log turns 2-3), none were seen below it.
- */
-inline constexpr size_t ModelLoadMinIntFree = 30720;
-inline constexpr size_t ModelLoadMinIntLargest = 7680;
 
 enum class Point : uint8_t {
 	Idle,      // ListenState entered, before the guard
@@ -34,9 +25,6 @@ enum class Point : uint8_t {
 
 /** Counts a new turn, starts tracking its low point and logs the idle line. Returns the idle snapshot. */
 HeapSnapshot beginTurn();
-
-/** True when `idle` leaves the model load its measured margin (see ModelLoadMinIntFree). */
-bool modelLoadAllowed(const HeapSnapshot& idle);
 
 /** Logs a snapshot taken earlier at `point`; `not_reached` when it was never taken. */
 void log(Point point, const HeapSnapshot& snapshot);

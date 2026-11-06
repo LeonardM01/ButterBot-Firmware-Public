@@ -117,13 +117,15 @@ void AskState::start(){
 }
 
 AskState::~AskState(){
-	// Normally the worker is done already: tick() leaves only once it is. This is the backstop for any
-	// other way out, so the next state never finds a reply still playing behind its back.
-	AskWorker* worker = ServiceLocator::AskWorkerInstance.get();
+	// Normally the worker is done already: tick() leaves only once it is. This is the backstop for any other
+	// way out (BBStateMachine::interrupt()). The worker reads the capture buffer until it is idle, so the state
+	// never lets go before that (C7), however long it takes: the abort is sticky and AskClient notices it
+	// within about 0.5 s, or once its connect deadline has passed during DNS and connect.
+	const AskWorker* worker = ServiceLocator::AskWorkerInstance.get();
 	if(worker != nullptr && worker->busy()){
 		AskClient::abortInFlight();
-		if(!worker->waitIdle(ExitWaitMs)){
-			CMF_LOG(AskState, LogLevel::Warning, "ask worker still busy after %d ms", (int) ExitWaitMs);
+		while(!worker->waitIdle(ExitWaitMs)){
+			CMF_LOG(AskState, LogLevel::Warning, "ask worker still busy, waiting another %d ms", (int) ExitWaitMs);
 		}
 	}
 	setThinkingLed(false);

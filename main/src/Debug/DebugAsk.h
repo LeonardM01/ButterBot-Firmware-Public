@@ -33,10 +33,10 @@ bool running();
 void abort();
 
 /**
- * Backstop for leaving early: aborts, waits up to `timeoutMs` for the worker, then ends the turn.
- * True if the worker had returned.
+ * Backstop for leaving early: aborts, waits until the worker has returned (warning every `warnEveryMs`), then
+ * ends the turn. The abort is noticed within about 0.5 s, or after AskClient's connect deadline.
  */
-bool stop(uint32_t timeoutMs);
+void stop(uint32_t warnEveryMs);
 
 }
 
