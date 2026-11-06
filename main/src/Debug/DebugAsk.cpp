@@ -217,9 +217,16 @@ private:
 			printf("BBMEASURE turn model_load_ms=%u question_bytes=%u\n", (unsigned) loadMs, (unsigned) wavLen);
 			printNow("loaded", true);
 
+			// Cloud turn shape (#20 finding): recording is over before the upload, and with AFE + MultiNet
+			// resident only ~10 KB of internal RAM is left, too little for Wi-Fi RX, so the reply download
+			// stalls after a few KB. Unload them first; the "loaded" figures above are the with-MultiNet numbers.
+			const AfeGlitchMeter::Stats glitches = afe.glitchStats();
+			afe.setMode(AudioFrontend::Mode::Off);
+			afe.unloadModel();
+			printNow("unloaded", true);
+
 			if(wavLen > 0 && !stopRequested()){
 				const AskResult r = askClient->ask(turn, capture, wavLen);
-				const AfeGlitchMeter::Stats glitches = afe.glitchStats();
 				printNow("after_turn", true);
 				printHeap("connected", connected, true);
 				printHeap("playing", playing, true);
