@@ -10,6 +10,7 @@
 #include "Services/Com.h"
 #include "Util/WiFiStation.h"
 #include "Services/WiFi/WiFiService.h"
+#include "Net/AskClient.h"
 #include "IdleState.h"
 #include "Util/Feed.h"
 #include "Services/LEDModuleControl.h"
@@ -46,8 +47,8 @@ RCState::RCState(BBStateMachine* sm) : State(sm){
 		return;
 	}
 
-	// TODO(#20 follow-up): abort any in-flight API request here, before the radio leaves the home network.
-	// The ask client (a later slice) registers that abort; RC mode has priority over a conversation.
+	// RC mode has priority over a conversation: stop any /v1/ask turn before the radio leaves the home network.
+	AskClient::abortInFlight();
 
 	wifiService = ServiceLocator::WiFiServiceInstance;
 	WiFi* wifi = wifiService->useControllerProfile();

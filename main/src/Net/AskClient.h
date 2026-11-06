@@ -10,6 +10,13 @@ class Audio;
 
 class AudioGenerator;
 
+/** Points in a turn where AskConfig::onPhase is called, for measurements. */
+enum class AskPhase : uint8_t {
+	Connected,  // connected (DNS, TCP, TLS) and request headers sent, before the upload
+	Playing,    // playback just started; normally mid-download
+	Downloaded, // last reply byte read, connection still open
+};
+
 struct AskConfig {
 	uint32_t connectTimeoutMs = 5000;    // DNS + TCP (+ TLS) and each upload write (#7 point 8)
 	uint32_t firstByteTimeoutMs = 12000; // upload done -> response headers (#7 point 8)
@@ -18,6 +25,13 @@ struct AskConfig {
 	size_t minRingBytes = 64 * 1024;     // ring size when the reply length is unknown (2 s)
 	size_t maxRingBytes = 640 * 1024;    // ring size cap: a 20 s reply (#7 point 5) fits without back-pressure
 	size_t maxReplyPcmBytes = 30 * 32000; // PCM played at most (30 s); the server caps replies at ~20 s
+
+	/**
+	 * Optional hook on the ask() task at each AskPhase. Keep it short (no printf to the UART):
+	 * the time it takes counts towards the download phase.
+	 */
+	void (*onPhase)(AskPhase phase, void* ctx) = nullptr;
+	void* phaseCtx = nullptr;
 };
 
 /** One /v1/ask turn. Timings are in ms; 0 when the phase was not reached. */
@@ -74,6 +88,12 @@ public:
 	 */
 	void abort();
 
+	/**
+	 * Aborts whichever turn is in flight on any AskClient, like abort(). Called on RC entry,
+	 * where the radio leaves the home network. A turn that starts afterwards is not affected.
+	 */
+	static void abortInFlight();
+
 	/** Prints a warning when BB_DEV_INSECURE is on. Call once at boot. */
 	static void logSecurityPosture();
 
@@ -82,6 +102,13 @@ private:
 	AudioGenerator& generator;
 	const AskConfig config;
 	std::atomic<bool> abortRequested{false};
+
+	// abortInFlight() bumps the generation; a turn stops when it differs from the one it started with.
+	inline static std::atomic<uint32_t> abortGeneration{0};
+	uint32_t turnGeneration = 0;
+
+	bool stopRequested() const;
+	void notify(AskPhase phase) const;
 };
 
 #endif //BUTTERBOT_FIRMWARE_ASKCLIENT_H
