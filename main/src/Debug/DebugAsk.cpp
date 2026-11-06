@@ -77,7 +77,8 @@ class Worker {
 public:
 	bool start(){
 		if(busy.exchange(true)) return false;
-		stopRequested = false;
+		// Armed here, before the worker waits for Wi-Fi or loads models, so an abort from now on is never lost.
+		turn = AskClient::beginTurn();
 
 		if(task == nullptr && xTaskCreatePinnedToCoreWithCaps(&Worker::taskMain, "DebugAsk", StackBytes, this, Priority, &task,
 															  Core, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT) != pdPASS){
@@ -93,20 +94,16 @@ public:
 	bool running() const{ return busy; }
 
 	void abort(){
-		stopRequested = true;
-		if(AskClient* c = client.load()){
-			c->abort();
-		}
+		AskClient::abortInFlight();
 	}
 
 private:
 	TaskHandle_t task = nullptr;
 	std::atomic<bool> busy{false};
-	std::atomic<bool> stopRequested{false};
+	uint32_t turn = 0; // written by start() before the worker is notified
 
 	PcmPassthroughGen generator;
 	std::optional<AskClient> askClient; // created once on the worker task, never destroyed
-	std::atomic<AskClient*> client{nullptr};
 
 	// Filled by the AskConfig::onPhase hook; printed after the turn so UART output doesn't skew the timings.
 	HeapSnapshot connected, playing, downloaded;
@@ -135,10 +132,14 @@ private:
 		}
 	}
 
+	bool stopRequested() const{
+		return AskClient::aborted(turn);
+	}
+
 	bool waitOnline(){
 		WiFiService* wifi = ServiceLocator::WiFiServiceInstance;
 		if(wifi == nullptr) return false;
-		for(uint32_t waited = 0; waited < OnlineTimeoutMs && !stopRequested; waited += OnlinePollMs){
+		for(uint32_t waited = 0; waited < OnlineTimeoutMs && !stopRequested(); waited += OnlinePollMs){
 			if(wifi->waitOnline(OnlinePollMs)) return true;
 		}
 		return false;
@@ -182,14 +183,13 @@ private:
 		if(audio == nullptr || afe == nullptr){
 			printf("BBMEASURE turn error=missing_service\n");
 		}else if(!waitOnline()){
-			printf("BBMEASURE turn error=%s waited_ms=%u\n", stopRequested ? "aborted" : "offline", (unsigned) msSince(tStart));
+			printf("BBMEASURE turn error=%s waited_ms=%u\n", stopRequested() ? "aborted" : "offline", (unsigned) msSince(tStart));
 		}else{
 			if(!askClient){
 				AskConfig cfg;
 				cfg.onPhase = &Worker::onPhase;
 				cfg.phaseCtx = this;
 				askClient.emplace(*audio, generator, cfg);
-				client = &*askClient;
 			}
 			runLoadedTurn(*afe);
 		}
@@ -205,6 +205,11 @@ private:
 
 	/** Steps 2-5: models resident, capture buffer, the ask, and cleanup. */
 	void runLoadedTurn(AudioFrontend& afe){
+		if(stopRequested()){
+			printf("BBMEASURE turn error=aborted before_model_load\n");
+			return;
+		}
+
 		const int64_t tLoad = esp_timer_get_time();
 		afe.loadModel(); // AFE + MultiNet, as ListenState does
 		afe.setMode(AudioFrontend::Mode::VAD);
@@ -218,8 +223,8 @@ private:
 			printf("BBMEASURE turn model_load_ms=%u question_bytes=%u\n", (unsigned) loadMs, (unsigned) wavLen);
 			printNow("loaded", true);
 
-			if(wavLen > 0 && !stopRequested){
-				const AskResult r = askClient->ask(capture, wavLen);
+			if(wavLen > 0 && !stopRequested()){
+				const AskResult r = askClient->ask(turn, capture, wavLen);
 				printNow("after_turn", true);
 				printHeap("connected", connected, true);
 				printHeap("playing", playing, true);

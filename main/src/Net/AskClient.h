@@ -1,10 +1,10 @@
 #ifndef BUTTERBOT_FIRMWARE_ASKCLIENT_H
 #define BUTTERBOT_FIRMWARE_ASKCLIENT_H
 
-#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include "AskOutcome.h"
+#include "TurnAbort.h"
 
 class Audio;
 
@@ -71,26 +71,30 @@ public:
 	AskClient(Audio& audio, AudioGenerator& generator, AskConfig config = {});
 
 	/**
+	 * Arms a new turn and returns its id. Call it before preparing the turn (waiting for Wi-Fi,
+	 * loading models, recording), so an abortInFlight() at any point after this cancels it.
+	 */
+	static uint32_t beginTurn();
+
+	/** True once the turn was aborted. Sticky: lets the caller skip or stop its own preparation. */
+	static bool aborted(uint32_t turn);
+
+	/**
 	 * Runs one turn and returns once playback has finished, failed or was aborted.
 	 *
 	 * Blocking: run it on a worker task, not the state machine. The task needs about
 	 * 8 KB of stack for esp_http_client and the TLS handshake; core 0 keeps it off
 	 * the Audio and AFE tasks on core 1. Assumes the network is already up.
 	 *
+	 * @param turn from beginTurn(); if it was already aborted, ask() returns at once
 	 * @param wav whole WAV file, RIFF header included; may live in flash or PSRAM
 	 */
-	AskResult ask(const uint8_t* wav, size_t len);
+	AskResult ask(uint32_t turn, const uint8_t* wav, size_t len);
 
 	/**
-	 * Aborts the turn in flight from any task (e.g. on RC entry). Noticed within
-	 * about 0.5 s, except during connect (up to connectTimeoutMs). Playback stops too.
-	 * Has no effect on the next ask(), which clears it.
-	 */
-	void abort();
-
-	/**
-	 * Aborts whichever turn is in flight on any AskClient, like abort(). Called on RC entry,
-	 * where the radio leaves the home network. A turn that starts afterwards is not affected.
+	 * Aborts the armed turn from any task, e.g. on RC entry or a button press. Noticed within
+	 * about 0.5 s once ask() runs, except during connect (up to connectTimeoutMs); playback stops too.
+	 * A turn armed afterwards is not affected.
 	 */
 	static void abortInFlight();
 
@@ -101,11 +105,8 @@ private:
 	Audio& audio;
 	AudioGenerator& generator;
 	const AskConfig config;
-	std::atomic<bool> abortRequested{false};
-
-	// abortInFlight() bumps the generation; a turn stops when it differs from the one it started with.
-	inline static std::atomic<uint32_t> abortGeneration{0};
-	uint32_t turnGeneration = 0;
+	inline static TurnAbort turns;
+	uint32_t turn = 0; // the turn ask() is running
 
 	bool stopRequested() const;
 	void notify(AskPhase phase) const;

@@ -72,16 +72,20 @@ void warnInsecure(){
 AskClient::AskClient(Audio& audio, AudioGenerator& generator, AskConfig config) : audio(audio), generator(generator), config(config){
 }
 
-void AskClient::abort(){
-	abortRequested = true;
+uint32_t AskClient::beginTurn(){
+	return turns.arm();
+}
+
+bool AskClient::aborted(uint32_t turn){
+	return turns.aborted(turn);
 }
 
 void AskClient::abortInFlight(){
-	abortGeneration.fetch_add(1);
+	turns.abort();
 }
 
 bool AskClient::stopRequested() const{
-	return abortRequested || abortGeneration.load() != turnGeneration;
+	return turns.aborted(turn);
 }
 
 void AskClient::notify(AskPhase phase) const{
@@ -96,10 +100,13 @@ void AskClient::logSecurityPosture(){
 	}
 }
 
-AskResult AskClient::ask(const uint8_t* wav, size_t len){
-	abortRequested = false;
-	turnGeneration = abortGeneration.load();
+AskResult AskClient::ask(uint32_t turn, const uint8_t* wav, size_t len){
+	this->turn = turn;
 	AskResult r;
+	if(stopRequested()){
+		r.aborted = true;
+		return r;
+	}
 
 	if constexpr(BB_DEV_INSECURE != 0){
 		warnInsecure();
