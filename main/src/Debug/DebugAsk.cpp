@@ -6,7 +6,6 @@
 #include <cstdio>
 #include <optional>
 #include <esp_heap_caps.h>
-#include <esp_timer.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <Core/Application.h>
@@ -15,6 +14,7 @@
 #include "Audio/AudioFrontend.h"
 #include "Audio/PcmPassthroughGen.h"
 #include "Net/AskClient.h"
+#include "Util/Elapsed.h"
 #include "Util/ServiceLocator.h"
 #include "MeasureFormat.h"
 
@@ -26,6 +26,7 @@ constexpr char QuestionPath[] = "/spiffs/debug/question.wav"; // staged into SPI
 constexpr size_t CaptureBytes = 320044;  // 10 s of 16 kHz mono s16 plus a WAV header (#3)
 constexpr uint32_t OnlineTimeoutMs = 20000;
 constexpr uint32_t OnlinePollMs = 250;   // bounds abort latency while waiting for Wi-Fi
+constexpr uint32_t IdlePollMs = 10;
 
 // esp_http_client (and TLS on an https build) needs ~8 KB. Internal RAM, because the task reads SPIFFS.
 constexpr uint32_t StackBytes = 8192;
@@ -69,15 +70,12 @@ void printNow(const char* at, bool turnMinimum){
 	printHeap(at, snapshot(), turnMinimum);
 }
 
-uint32_t msSince(int64_t startUs){
-	return (uint32_t) ((esp_timer_get_time() - startUs) / 1000);
-}
-
 class Worker {
 public:
 	bool start(){
 		if(busy.exchange(true)) return false;
-		stopRequested = false;
+		// Armed here, before the worker waits for Wi-Fi or loads models, so an abort from now on is never lost.
+		turn = AskClient::beginTurn();
 
 		if(task == nullptr && xTaskCreatePinnedToCoreWithCaps(&Worker::taskMain, "DebugAsk", StackBytes, this, Priority, &task,
 															  Core, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT) != pdPASS){
@@ -93,22 +91,18 @@ public:
 	bool running() const{ return busy; }
 
 	void abort(){
-		stopRequested = true;
-		if(AskClient* c = client.load()){
-			c->abort();
-		}
+		AskClient::abortInFlight();
 	}
 
 private:
 	TaskHandle_t task = nullptr;
 	std::atomic<bool> busy{false};
-	std::atomic<bool> stopRequested{false};
+	uint32_t turn = 0; // written by start() before the worker is notified
 
 	PcmPassthroughGen generator;
 	std::optional<AskClient> askClient; // created once on the worker task, never destroyed
-	std::atomic<AskClient*> client{nullptr};
 
-	// Filled by the AskConfig::onPhase hook; printed after the turn so UART output doesn't skew the timings.
+	// Filled by the AskClient phase hook; printed after the turn so UART output doesn't skew the timings.
 	HeapSnapshot connected, playing, downloaded;
 
 	static void taskMain(void* arg){
@@ -120,25 +114,28 @@ private:
 		}
 	}
 
-	static void onPhase(AskPhase phase, void* ctx){
-		auto* self = static_cast<Worker*>(ctx);
+	void onPhase(AskPhase phase){
 		switch(phase){
 			case AskPhase::Connected:
-				self->connected = snapshot();
+				connected = snapshot();
 				break;
 			case AskPhase::Playing:
-				self->playing = snapshot();
+				playing = snapshot();
 				break;
 			case AskPhase::Downloaded:
-				self->downloaded = snapshot();
+				downloaded = snapshot();
 				break;
 		}
+	}
+
+	bool stopRequested() const{
+		return AskClient::aborted(turn);
 	}
 
 	bool waitOnline(){
 		WiFiService* wifi = ServiceLocator::WiFiServiceInstance;
 		if(wifi == nullptr) return false;
-		for(uint32_t waited = 0; waited < OnlineTimeoutMs && !stopRequested; waited += OnlinePollMs){
+		for(uint32_t waited = 0; waited < OnlineTimeoutMs && !stopRequested(); waited += OnlinePollMs){
 			if(wifi->waitOnline(OnlinePollMs)) return true;
 		}
 		return false;
@@ -162,7 +159,7 @@ private:
 	}
 
 	void runTurn(){
-		const int64_t tStart = esp_timer_get_time();
+		const int64_t tStart = nowUs();
 		connected = playing = downloaded = HeapSnapshot{};
 
 		// The Wi-Fi core is fixed by sdkconfig, so compare core 0 and 1 with two builds (docs/measurement-build.md).
@@ -182,14 +179,10 @@ private:
 		if(audio == nullptr || afe == nullptr){
 			printf("BBMEASURE turn error=missing_service\n");
 		}else if(!waitOnline()){
-			printf("BBMEASURE turn error=%s waited_ms=%u\n", stopRequested ? "aborted" : "offline", (unsigned) msSince(tStart));
+			printf("BBMEASURE turn error=%s waited_ms=%u\n", stopRequested() ? "aborted" : "offline", (unsigned) msSince(tStart));
 		}else{
 			if(!askClient){
-				AskConfig cfg;
-				cfg.onPhase = &Worker::onPhase;
-				cfg.phaseCtx = this;
-				askClient.emplace(*audio, generator, cfg);
-				client = &*askClient;
+				askClient.emplace(*audio, generator, [this](AskPhase phase){ onPhase(phase); });
 			}
 			runLoadedTurn(*afe);
 		}
@@ -205,8 +198,14 @@ private:
 
 	/** Steps 2-5: models resident, capture buffer, the ask, and cleanup. */
 	void runLoadedTurn(AudioFrontend& afe){
-		const int64_t tLoad = esp_timer_get_time();
+		if(stopRequested()){
+			printf("BBMEASURE turn error=aborted before_model_load\n");
+			return;
+		}
+
+		const int64_t tLoad = nowUs();
 		afe.loadModel(); // AFE + MultiNet, as ListenState does
+		afe.resetGlitchMeter();
 		afe.setMode(AudioFrontend::Mode::VAD);
 		const uint32_t loadMs = msSince(tLoad);
 
@@ -218,8 +217,9 @@ private:
 			printf("BBMEASURE turn model_load_ms=%u question_bytes=%u\n", (unsigned) loadMs, (unsigned) wavLen);
 			printNow("loaded", true);
 
-			if(wavLen > 0 && !stopRequested){
-				const AskResult r = askClient->ask(capture, wavLen);
+			if(wavLen > 0 && !stopRequested()){
+				const AskResult r = askClient->ask(turn, capture, wavLen);
+				const AfeGlitchMeter::Stats glitches = afe.glitchStats();
 				printNow("after_turn", true);
 				printHeap("connected", connected, true);
 				printHeap("playing", playing, true);
@@ -227,6 +227,8 @@ private:
 
 				char line[MeasureLineBytes];
 				formatAskMeasure(line, sizeof(line), r);
+				printf("%s\n", line);
+				formatAfeMeasure(line, sizeof(line), glitches);
 				printf("%s\n", line);
 			}
 		}
@@ -251,6 +253,15 @@ bool DebugAsk::running(){
 
 void DebugAsk::abort(){
 	worker.abort();
+}
+
+bool DebugAsk::waitIdle(uint32_t timeoutMs){
+	const int64_t tStart = nowUs();
+	while(worker.running()){
+		if(msSince(tStart) >= timeoutMs) return false;
+		vTaskDelay(pdMS_TO_TICKS(IdlePollMs));
+	}
+	return true;
 }
 
 #endif

@@ -3,6 +3,8 @@
 
 #if BB_DEBUG_ASK_BUILD
 
+#include <cstdint>
+
 /**
  * The measurement build's debug ask turn (#20). Compiled in only when secrets.h sets BB_DEBUG_ASK 1
  * (main/CMakeLists.txt turns that into BB_DEBUG_ASK_BUILD). See docs/measurement-build.md.
@@ -26,6 +28,9 @@ bool running();
 
 /** Stops the turn in flight from any task; it cleans up and ends shortly after. */
 void abort();
+
+/** Blocks up to `timeoutMs` until no turn is running. True if none is. */
+bool waitIdle(uint32_t timeoutMs);
 
 }
 

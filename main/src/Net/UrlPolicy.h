@@ -51,4 +51,22 @@ constexpr UrlPolicy checkApiUrl(std::string_view url, bool devInsecure){
 	return verdict;
 }
 
+/**
+ * The host name or address to resolve for an http:// or https:// URL: no scheme, port or path,
+ * and no brackets around an IPv6 literal. Empty when the URL has neither scheme.
+ */
+constexpr std::string_view apiHost(std::string_view url){
+	for(const std::string_view scheme : {std::string_view("https://"), std::string_view("http://")}){
+		if(!url.starts_with(scheme)) continue;
+
+		const std::string_view authority = url.substr(scheme.size(), url.find('/', scheme.size()) - scheme.size());
+		if(authority.starts_with('[')){
+			const size_t close = authority.find(']');
+			return close == std::string_view::npos ? std::string_view() : authority.substr(1, close - 1);
+		}
+		return authority.substr(0, authority.find(':'));
+	}
+	return {};
+}
+
 #endif //BUTTERBOT_FIRMWARE_URLPOLICY_H

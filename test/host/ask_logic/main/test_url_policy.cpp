@@ -48,6 +48,24 @@ static void test_the_check_runs_at_compile_time(){
 	TEST_PASS();
 }
 
+static void test_the_host_to_resolve_drops_scheme_port_and_path(){
+	TEST_ASSERT_TRUE(apiHost("https://api.example.com") == "api.example.com");
+	TEST_ASSERT_TRUE(apiHost("https://api.example.com:8443/butterbot") == "api.example.com");
+	TEST_ASSERT_TRUE(apiHost("http://192.168.1.2:8080") == "192.168.1.2");
+}
+
+static void test_the_host_of_an_ipv6_literal_has_no_brackets(){
+	TEST_ASSERT_TRUE(apiHost("https://[2001:db8::1]:8443") == "2001:db8::1");
+	TEST_ASSERT_TRUE(apiHost("https://[2001:db8::1]") == "2001:db8::1");
+}
+
+static void test_there_is_no_host_without_a_known_scheme(){
+	TEST_ASSERT_TRUE(apiHost("ftp://api.example.com").empty());
+	TEST_ASSERT_TRUE(apiHost("api.example.com").empty());
+	TEST_ASSERT_TRUE(apiHost("https://[2001:db8::1").empty());
+	static_assert(apiHost("https://api.example.invalid") == "api.example.invalid");
+}
+
 void runUrlPolicyTests(){
 	RUN_TEST(test_https_is_always_allowed);
 	RUN_TEST(test_http_needs_the_dev_insecure_switch);
@@ -57,4 +75,7 @@ void runUrlPolicyTests(){
 	RUN_TEST(test_the_url_is_a_base_without_query_fragment_or_trailing_slash);
 	RUN_TEST(test_whitespace_and_control_characters_are_rejected);
 	RUN_TEST(test_the_check_runs_at_compile_time);
+	RUN_TEST(test_the_host_to_resolve_drops_scheme_port_and_path);
+	RUN_TEST(test_the_host_of_an_ipv6_literal_has_no_brackets);
+	RUN_TEST(test_there_is_no_host_without_a_known_scheme);
 }

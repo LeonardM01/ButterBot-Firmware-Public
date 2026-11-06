@@ -31,6 +31,7 @@ static void test_the_ask_line_carries_every_measurement(){
 	AskResult r;
 	r.outcome = AskOutcome::Play;
 	r.status = 200;
+	r.dnsMs = 12;
 	r.connectMs = 35;
 	r.uploadBytes = 68480;
 	r.uploadMs = 120;
@@ -44,7 +45,7 @@ static void test_the_ask_line_carries_every_measurement(){
 
 	char buf[MeasureLineBytes];
 	formatAskMeasure(buf, sizeof(buf), r);
-	TEST_ASSERT_EQUAL_STRING("BBMEASURE ask outcome=play status=200 aborted=0 truncated=0 connect_ms=35 "
+	TEST_ASSERT_EQUAL_STRING("BBMEASURE ask outcome=play status=200 aborted=0 truncated=0 dns_ms=12 connect_ms=35 "
 							 "up_bytes=68480 up_ms=120 up_KiB_s=557.3 first_byte_ms=1850 "
 							 "down_bytes=160044 down_ms=400 down_KiB_s=390.7 first_audio_ms=1900 "
 							 "underruns=2 starved_ms=64 played_bytes=160000", buf);
@@ -57,7 +58,7 @@ static void test_a_failed_turn_names_its_outcome_and_flags(){
 
 	char buf[MeasureLineBytes];
 	formatAskMeasure(buf, sizeof(buf), r);
-	TEST_ASSERT_EQUAL_STRING("BBMEASURE ask outcome=lost status=-1 aborted=1 truncated=1 connect_ms=0 "
+	TEST_ASSERT_EQUAL_STRING("BBMEASURE ask outcome=lost status=-1 aborted=1 truncated=1 dns_ms=0 connect_ms=0 "
 							 "up_bytes=0 up_ms=0 up_KiB_s=- first_byte_ms=0 "
 							 "down_bytes=0 down_ms=0 down_KiB_s=- first_audio_ms=0 "
 							 "underruns=0 starved_ms=0 played_bytes=0", buf);
@@ -75,6 +76,14 @@ static void test_a_short_buffer_is_cut_and_terminated(){
 	TEST_ASSERT_EQUAL_STRING("BBMEASURE ask outcome=l", buf);
 }
 
+static void test_the_afe_line_carries_every_glitch_counter(){
+	AfeGlitchMeter::Stats stats{1, 110, 2, 96, 3, 4};
+	char buf[MeasureLineBytes];
+	formatAfeMeasure(buf, sizeof(buf), stats);
+	TEST_ASSERT_EQUAL_STRING("BBMEASURE afe mic_overflows=1 mic_lost_ms=110 mic_read_errors=2 "
+							 "afe_backlog_max_ms=96 afe_overflows=3 fetch_errors=4", buf);
+}
+
 void runMeasureFormatTests(){
 	RUN_TEST(test_throughput_is_kib_per_second_with_one_decimal);
 	RUN_TEST(test_throughput_without_a_duration_is_a_dash);
@@ -82,4 +91,5 @@ void runMeasureFormatTests(){
 	RUN_TEST(test_the_ask_line_carries_every_measurement);
 	RUN_TEST(test_a_failed_turn_names_its_outcome_and_flags);
 	RUN_TEST(test_a_short_buffer_is_cut_and_terminated);
+	RUN_TEST(test_the_afe_line_carries_every_glitch_counter);
 }

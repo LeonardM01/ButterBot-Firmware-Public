@@ -18,6 +18,10 @@
 #include "esp_mn_iface.h"
 #include "model_path.h"
 #include "Services/LEDControl.h"
+#if BB_DEBUG_ASK_BUILD
+#include <optional>
+#include "Debug/AfeGlitchMeter.h"
+#endif
 
 class AudioFrontend : public Object {
 	GENERATED_BODY(AudioFrontend, Object, void);
@@ -99,7 +103,23 @@ public:
 	void loadModel();
 	void unloadModel();
 
+#if BB_DEBUG_ASK_BUILD
+	/**
+	 * Measurement build only (#20): starts counting audio-input glitches (late mic reads, AFE backlog,
+	 * failed reads and fetches) from zero. Needs the model loaded and the mode Off.
+	 */
+	void resetGlitchMeter();
+
+	/** Counters since resetGlitchMeter(); all zero if it was never called. */
+	AfeGlitchMeter::Stats glitchStats() const;
+#endif
+
 private:
+#if BB_DEBUG_ASK_BUILD
+	// Created by resetGlitchMeter() while the feed and fetch tasks wait at their gates.
+	std::optional<AfeGlitchMeter> glitchMeter;
+#endif
+
 	void feedTaskFunc();
 
 	std::unique_ptr<Threaded> feedTask;

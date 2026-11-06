@@ -5,7 +5,8 @@ Unity tests for the pure logic of the measurement build (#20). They build with t
 Covered code is in `main/src/Debug/`:
 
 - `PowerPress`: reads a power-button hold in Idle as short (listen), medium (debug ask turn) or ignored.
-- `MeasureFormat`: the greppable `BBMEASURE ask ...` summary line, with KiB/s throughput.
+- `MeasureFormat`: the greppable `BBMEASURE ask ...` and `BBMEASURE afe ...` lines, with KiB/s throughput.
+- `AfeGlitchMeter`: estimates mic audio dropped by late AFE feed reads and tracks the AFE's feed-to-fetch backlog.
 
 The debug turn itself (`DebugAsk`, `DebugAskState`) needs the robot; see `docs/measurement-build.md`.
 

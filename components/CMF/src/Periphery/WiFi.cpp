@@ -120,7 +120,7 @@ void WiFi::setNetworkParameters(const std::string& name, const std::string& pass
 
 #ifdef CONFIG_CMF_WIFI_STA_SUPPORT
 
-void WiFi::startStation(bool dhcpClient /*= false*/, wifi_storage_t storage /*= WIFI_STORAGE_FLASH*/) noexcept {
+void WiFi::startStation(StationAddressing addressing /*= Static11*/, wifi_storage_t storage /*= WIFI_STORAGE_FLASH*/) noexcept {
 	if(type != WiFiType::None) {
 		CMF_LOG(WiFi, LogLevel::Warning, "WiFi station attempted to start when WiFi is already running.");
 		return;
@@ -128,7 +128,7 @@ void WiFi::startStation(bool dhcpClient /*= false*/, wifi_storage_t storage /*= 
 
 	type = WiFiType::Station;
 
-	createNetif(dhcpClient);
+	createNetif(addressing);
 
 	const wifi_init_config_t cfg_wifi = WIFI_INIT_CONFIG_DEFAULT();
 	esp_wifi_init(&cfg_wifi);
@@ -406,7 +406,7 @@ void WiFi::onNativeEvent(uint32_t id, void *data) noexcept {
     }
 }
 
-void WiFi::createNetif(bool dhcpClient /*= false*/) noexcept {
+void WiFi::createNetif(StationAddressing addressing /*= Static11*/) noexcept {
     if(type != WiFiType::AccessPoint && type != WiFiType::Station) {
         CMF_LOG(WiFi, LogLevel::Warning, "Attempted to create a netif for a WiFi type that is not yet supported.");
         return;
@@ -442,7 +442,7 @@ void WiFi::createNetif(bool dhcpClient /*= false*/) noexcept {
         esp_wifi_set_default_wifi_ap_handlers();
 #endif
 	// ReSharper disable once CppDFAConstantConditions
-    }else if(type == WiFiType::Station && dhcpClient) {
+    }else if(type == WiFiType::Station && addressing == StationAddressing::Dhcp) {
 #ifdef CONFIG_CMF_WIFI_STA_SUPPORT
         // Stock station netif: DHCP client on, IP_EVENT_STA_GOT_IP posted once an address is leased.
         const esp_netif_config_t cfg = ESP_NETIF_DEFAULT_WIFI_STA();
