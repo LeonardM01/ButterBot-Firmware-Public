@@ -4,6 +4,9 @@ A dev build that runs one `/v1/ask` turn on a button press and prints RAM, PSRAM
 
 Never ship this build: it has a debug trigger, and except for the HTTPS run in section 5 it talks plain HTTP.
 
+The real voice turn (#22) needs no measurement build: section 8 runs its on-robot acceptance checks with
+`BB_DEBUG_ASK 0`.
+
 ## 1. Set up `main/secrets.h`
 
 Start from `main/secrets.h.example`:
@@ -52,15 +55,16 @@ Pull the numbers out with `grep BBMEASURE turn.log`. One turn prints, in order:
 | `turn start` | worker core, Wi-Fi task core, `LWIP_MAX_SOCKETS`, capture buffer size |
 | `heap at=idle` | before the turn; `min` is since boot |
 | `turn model_load_ms=… question_bytes=…` | AFE + MultiNet load time |
-| `heap at=loaded` | MultiNet resident, AFE in VAD mode, 320 KB capture buffer allocated |
+| `heap at=loaded` | MultiNet resident, AFE in VAD mode, question read into the 320 KB capture buffer (allocated at boot) |
+| `heap at=unloaded` | AFE stopped and models unloaded, as a voice turn does before the network |
 | `heap at=connected` | connected and request headers sent. On the `https://` run (section 5) this is the TLS peak |
 | `heap at=playing` | playback started, normally mid-download |
 | `heap at=downloaded` | last byte read, socket still open |
-| `heap at=after_turn` | playback done, models still loaded |
+| `heap at=after_turn` | playback done |
 | `ask …` | outcome, status, `dns_ms`, `connect_ms` (TCP, plus the TLS handshake on `https://`), upload/download bytes, ms and KiB/s, first byte, first audio, playback `underruns` and `starved_ms` |
 | `afe …` | audio-input glitches during the turn, see below |
-| `stack task=DebugAsk` | worker stack size and its high-water mark (bytes never used) |
-| `heap at=cleanup` | models unloaded, buffer freed; `min` is since boot again |
+| `stack task=AskWorker` | the shared ask worker's stack size (12 KB, PSRAM) and its high-water mark (bytes never used) |
+| `heap at=cleanup` | turn over; `min` is since boot again |
 
 `int_*` is `MALLOC_CAP_INTERNAL`, `psram_*` is `MALLOC_CAP_SPIRAM`: free, minimum free and largest free block, in bytes. During the turn (`min_since=turn`) the minimum is the low point since the turn started. `AskClient` also prints its own `ask: HTTP …` line, and errors show as `BBMEASURE turn error=…`.
 
@@ -134,7 +138,7 @@ Setup: <router / distance>, BLE <connected to phone/controller/none>, reply <N> 
 | After cleanup | | |
 | Turn minimum (from `after_turn`) | | |
 
-DebugAsk stack: <min_free> of 8192 B unused.
+AskWorker stack: <min_free> of 12288 B unused.
 
 ### Throughput and latency (median of <N>)
 
@@ -168,3 +172,81 @@ Not measured yet: the laptop API is plain HTTP. To be filled in from the run in 
 - **Task cores:** Wi-Fi on core <N>, ask worker on core <N> (prio <N>, <N> KB stack), because …
 - **MultiNet for cloud turns:** <keep resident / unload before upload>, because internal min was <N> and PSRAM largest block was <N>.
 ```
+
+## 8. Voice turn acceptance on the robot (#22, checklist items 4–10 of #15)
+
+No measurement build here: this tests the shipped voice turn against the laptop API.
+
+1. `main/secrets.h` as in section 1, but with `#define BB_DEBUG_ASK 0`. Keep `BB_DEV_INSECURE 1` and the
+   `http://<laptop LAN IP>:8080` URL. Start the API as in section 2.
+2. Flash and log the whole session to a file outside the repo. `idf.py monitor` needs a TTY, so either run it
+   in a terminal:
+
+   ```sh
+   . ~/.espressif/tools/activate_idf_v5.5.3.sh
+   idf.py -p <PORT> flash monitor | tee ~/butterbot-logs/voice-$(date +%H%M).log
+   ```
+
+   or, without a TTY, flash and then capture with the IDF Python's pyserial (`-I` keeps it isolated). The
+   USB-UART only exists while the robot is powered, and a reset pulse switches it off unless the power button
+   is held, so this waits for the port and opens it without touching DTR/RTS. Save it outside the repo as
+   `~/butterbot-logs/capture.py`:
+
+   ```python
+   import os, sys, time, serial
+   port, out, seconds = sys.argv[1], sys.argv[2], float(sys.argv[3])
+   end = time.time() + seconds
+   with open(out, "ab") as f:
+       while time.time() < end:
+           if not os.path.exists(port):
+               time.sleep(0.2); continue
+           s = serial.Serial(); s.port, s.baudrate, s.timeout = port, 115200, 0.5
+           s.dtr = False; s.rts = False          # before open(): no reset pulse
+           try:
+               s.open()
+               while time.time() < end:
+                   if chunk := s.read(4096):
+                       f.write(chunk); f.flush()
+           except (serial.SerialException, OSError):
+               pass                              # robot switched off; wait for it
+           finally:
+               s.close()
+   ```
+
+   ```sh
+   . ~/.espressif/tools/activate_idf_v5.5.3.sh
+   idf.py -p <PORT> flash          # the robot switches off after the flash: that's the boot hold rule
+   python -I ~/butterbot-logs/capture.py <PORT> ~/butterbot-logs/voice.log 1200 &
+   ```
+
+   Then switch the robot on with the usual 1 s power-button hold. The last argument is how long to record,
+   in seconds (1200 s = 20 min). The first boot lines can be missed while USB enumerates; the `VoiceTurn`
+   lines come later.
+3. Wait for `Wi-Fi online.` and the `VoiceTurn: heap at=online` line, then run the checks below in one boot,
+   in this order. A short press (0.5 s or less) or the controller's Listen starts a turn.
+
+| # | Do | Expect | Grep |
+|---|---|---|---|
+| 4 | Ask a built-in command ("tell me a joke"). Repeat with the router off. | The local routine, both times. No upload | that turn has `at=idle`, `at=loaded`, `at=after` and no `at=network`; no `Listen result` |
+| 5 | Ask a question ("what is the capital of France"). | Filler line with fast LED blink. The reply starts before the download ends (`first audio` < `down … ms`). Back to Idle | `ask: … question handed over`, `AskClient: ask: HTTP 200`, `AskWorker: stack min_free` |
+| 6 | Ask, then press the power button while the filler or reply plays. Again with the controller's ShutUp, and once while it is still connecting. | Stops at once and says "OK"/"Got it". The robot is back in Idle within about 0.5 s (connecting: up to the 5 s budget) | `AskClient: ask: … aborted` or `HTTP -1`; no reply after the abort phrase |
+| 6b | Ask, then enter RC from the controller while it thinks. | Silent stop, then RC mode | `AskWorker: stack min_free`, then `WiFiService`'s switch to the controller network |
+| 7 | Router off (or `BB_API_URL` host unreachable), wait for `Wi-Fi offline`, then ask. | The offline line ("My brain is out of Wi-Fi range"…). Local commands still work | `ask: offline` |
+| 8 | Stop the API and ask. Then start it, pause it with `kill -STOP <api pid>` (it still accepts the connection but never answers) and ask; `kill -CONT` afterwards. | "My thoughts got lost…" both times | `connect failed`; then `no reply within 12000 ms` (or `upload failed` if the paused server's socket buffer fills) |
+| 9 | Press and say nothing. | "I did not understand that", no upload. (The decision: no-speech is local, a server 204 says the same line.) | `question=0, recorded 0 B` |
+| 10 | Ask one question that runs past 10 s. | Recording stops at 10 s, the question is asked anyway | `ask: 320044 B question handed over` |
+
+4. Memory across turns: run at least 5 consecutive turns in that boot, mixing 4, 5, 6 and 9. Then:
+
+   ```sh
+   L=~/butterbot-logs/voice.log
+   grep -a "VoiceTurn: heap" $L                       # all phases of every turn
+   grep -a "VoiceTurn: heap turn=.* at=idle" $L       # int_free/int_largest stay within ~600 B of turn 1
+   grep -a "at=loaded" $L                             # int_min well above the 59-319 B of #20
+   grep -a "at=network" $L                            # int_free about idle - 2 KB
+   grep -a "AskWorker: stack min_free" $L             # > 4096
+   grep -aE "ALLOC FAIL|abort\(\)|Guru Meditation|rst:0x|Not loading the speech models" $L   # nothing after boot
+   ```
+
+   What each value should look like, and why, is in `docs/voice-turn-memory.md`.
+5. Privacy (checklist 12): `grep -aiE "bearer|token|transcript" $L` shows only the boot's insecure-build warning.
