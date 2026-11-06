@@ -31,6 +31,11 @@ target_compile_definitions(${COMPONENT_LIB} PRIVATE BB_DEBUG_ASK_BUILD=${BB_DEBU
 
 if(BB_DEBUG_ASK)
     message(WARNING "BB_DEBUG_ASK is 1: measurement build with the debug ask turn. Never ship this.")
+    # The canned question is a local, gitignored file (no audio in git); see docs/measurement-build.md step 1.
+    if(NOT EXISTS "${BASEDIR}/debug/question.wav")
+        message(FATAL_ERROR "BB_DEBUG_ASK is 1 but debug/question.wav is missing. Copy a 16 kHz mono s16 WAV "
+                "there, e.g. butterbot-api/internal/ask/testdata/question.wav from the parent repo.")
+    endif()
     # Stage spiffs/ plus the canned question in the build dir; release images stay as they are.
     set(DEBUG_SPIFFS_DIR "${CMAKE_BINARY_DIR}/spiffs_debug_ask")
     add_custom_target(debug_ask_spiffs_stage

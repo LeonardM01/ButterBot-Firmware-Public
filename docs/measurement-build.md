@@ -19,6 +19,14 @@ Start from `main/secrets.h.example`:
 
 Use the dev token, never a production one. Find the laptop IP with `ipconfig getifaddr en0`. The configure step prints a `BB_DEBUG_ASK is 1` warning, which confirms the switch was read.
 
+Put the canned question at `debug/question.wav`. It is gitignored, so audio never goes into this repo. From the parent repo checkout:
+
+```sh
+cp ../butterbot-api/internal/ask/testdata/question.wav debug/question.wav
+```
+
+The build stops with an error if `BB_DEBUG_ASK` is 1 and the file is missing.
+
 ## 2. Start the API on the laptop
 
 Follow "Run it on the laptop" in `butterbot-api/README.md` in the parent repo: `BB_DEV_MODE=1`, `BB_LISTEN_ADDR` on the LAN IP, and the dev token's hash in the devices file. Check it with the `curl` example there before you flash. If the macOS firewall is on, allow incoming connections for the Go binary.
@@ -30,7 +38,7 @@ Follow "Run it on the laptop" in `butterbot-api/README.md` in the parent repo: `
 idf.py -p <PORT> flash monitor | tee turn.log
 ```
 
-`flash` also writes the storage SPIFFS image with `/spiffs/debug/question.wav` in it (68 KB, synthetic "question" from butterbot-api's testdata).
+`flash` also writes the storage SPIFFS image with `/spiffs/debug/question.wav` in it (the file you copied in step 1).
 
 1. Wait for the `Wi-Fi online.` warning.
 2. Leave the robot in Idle with no routine running. Hold the power button for **1 to 2.5 s**, then release. A tap (0.5 s or less) still listens as usual, and a 3 s hold still shuts down.

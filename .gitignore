@@ -4,6 +4,9 @@
 # Local firmware credentials. Start with main/secrets.h.example, never commit this file.
 main/secrets.h
 
+# Canned question for the BB_DEBUG_ASK measurement build. Copied locally, never committed.
+debug/*.wav
+
 cmake-build-debug
 build
 
