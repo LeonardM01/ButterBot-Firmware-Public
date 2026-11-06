@@ -115,6 +115,15 @@ protected:
 			return;
 		}
 
+		// A panic restarts only the CPU (RTC_SW_CPU_RST); GPIO interrupt enables from the crashed run
+		// survive it. A stale level interrupt with no handler yet then storms as soon as the ISR service
+		// is installed and the interrupt watchdog trips, looping forever. Start from a clean slate; this
+		// touches only the interrupt-enable bits, not pin levels (PIN_PWDN keeps the robot powered).
+		for(int pin = 0; pin < GPIO_NUM_MAX; pin++){
+			if(GPIO_IS_VALID_GPIO(pin)){
+				ESP_ERROR_CHECK_WITHOUT_ABORT(gpio_intr_disable(static_cast<gpio_num_t>(pin)));
+			}
+		}
 		gpio_install_isr_service(ESP_INTR_FLAG_IRAM);
 
 		if(JigHWTest::checkJig()){
