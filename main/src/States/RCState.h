@@ -15,7 +15,8 @@ public:
 private:
 	StrongObjectPtr<class Feed> feed;
 	StrongObjectPtr<class WiFiStation> wifiSta;
-	StrongObjectPtr<class WiFi> wifi;
+	// Borrowed from WiFiService for the duration of RC mode; never deleted here.
+	class WiFiService* wifiService = nullptr;
 
 private:
 	void onCommand(Ctrl::Command cmd);

@@ -13,7 +13,7 @@ WiFiStation::WiFiStation(WiFi* wifi, const char* ssid, const char* password) noe
         return;
     }
 
-    wifi->startStation();
+    // The station is already running: WiFiService starts it at boot and lends it to RC mode.
 
     wifi->OnScanDone.bind(this, &WiFiStation::onScanDone);
     wifi->OnStationConnected.bind(this, &WiFiStation::onConnect);

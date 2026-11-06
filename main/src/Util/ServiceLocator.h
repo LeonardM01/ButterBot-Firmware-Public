@@ -12,6 +12,7 @@
 #include "Audio/SpeechGen.h"
 #include "Audio/SpeechAudioGen.h"
 #include "Audio/MicInput.h"
+#include "Services/WiFi/WiFiService.h"
 
 class ServiceLocator{
 public:
@@ -34,6 +35,9 @@ public:
 	inline static std::unique_ptr<SpeechAudioGen> SpeechAudioGenInstance = nullptr;
 
 	inline static std::unique_ptr<MicInput> MicInputInstance = nullptr;
+
+	// Owns the radio for the whole runtime: created once at boot, never deleted (see WiFiService.h).
+	inline static WiFiService* WiFiServiceInstance = nullptr;
 };
 
 #endif //BUTTERBOT_FIRMWARE_SERVICELOCATOR_H

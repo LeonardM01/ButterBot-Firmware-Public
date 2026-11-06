@@ -308,6 +308,9 @@ protected:
 
 		ServiceLocator::ControllerStateInstance = std::make_unique<ControllerState>();
 
+		// Joins home Wi-Fi in the background; RC mode borrows the same radio.
+		ServiceLocator::WiFiServiceInstance = new WiFiService();
+
 		EventBag* eventBag = registerService<EventBag>();
 
 		BBStateMachine* stateMachine = registerService<BBStateMachine>();

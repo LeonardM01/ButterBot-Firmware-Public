@@ -9,6 +9,7 @@
 #include "Audio/AudioFrontend.h"
 #include "Services/Com.h"
 #include "Util/WiFiStation.h"
+#include "Services/WiFi/WiFiService.h"
 #include "IdleState.h"
 #include "Util/Feed.h"
 #include "Services/LEDModuleControl.h"
@@ -35,9 +36,8 @@ RCState::RCState(BBStateMachine* sm) : State(sm){
 	sm->bindState(com->OnDriveData, this, &RCState::onDriveData);
 	sm->bindState(com->OnConnStatus, this, &RCState::onBTDisconnect);
 
-	wifi = newObject<WiFi>(sm);
-	if(wifi == nullptr){
-		CMF_LOG(RCState, Warning, "WiFi is nullptr in postInitProperties.");
+	if(ServiceLocator::WiFiServiceInstance == nullptr){
+		CMF_LOG(RCState, Warning, "WiFiService is nullptr in postInitProperties.");
 		return;
 	}
 
@@ -46,7 +46,13 @@ RCState::RCState(BBStateMachine* sm) : State(sm){
 		return;
 	}
 
-	wifiSta = newObject<WiFiStation>(sm, *wifi, ServiceLocator::ControllerStateInstance->getSSID(), ServiceLocator::ControllerStateInstance->getPassword());
+	// TODO(#20 follow-up): abort any in-flight API request here, before the radio leaves the home network.
+	// The ask client (a later slice) registers that abort; RC mode has priority over a conversation.
+
+	wifiService = ServiceLocator::WiFiServiceInstance;
+	WiFi* wifi = wifiService->useControllerProfile();
+
+	wifiSta = newObject<WiFiStation>(sm, wifi, ServiceLocator::ControllerStateInstance->getSSID(), ServiceLocator::ControllerStateInstance->getPassword());
 
 	sm->bindState(wifiSta->OnStationEvent, this, &RCState::onWifiDisconnect);
 
@@ -62,7 +68,10 @@ RCState::~RCState(){
 
 	delete *feed;
 	delete *wifiSta;
-	delete *wifi;
+
+	if(wifiService != nullptr){
+		wifiService->useHomeProfile();
+	}
 }
 
 int64_t RCState::getDynamicTickInterval() const noexcept{
