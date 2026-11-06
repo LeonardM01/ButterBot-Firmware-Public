@@ -7,6 +7,7 @@
 #include <limits>
 #include <span>
 #include <Util/ServiceLocator.h>
+#include "Util/ListenLed.h"
 #include "esp_afe_sr_models.h"
 #include "esp_mn_models.h"
 #include "esp_mn_speech_commands.h"
@@ -396,9 +397,7 @@ void AudioFrontend::setMode(Mode mode){
 	}
 
 	if((previousMode == Mode::Speech || previousMode == Mode::Audio) && mode != Mode::Speech && mode != Mode::Audio){
-		if(ServiceLocator::LEDControlInstance){
-			ServiceLocator::LEDControlInstance->stopListen();
-		}
+		setListenLed(false);
 	}
 
 	switch(mode){
@@ -407,9 +406,7 @@ void AudioFrontend::setMode(Mode mode){
 				CMF_LOG(AudioFrontend, LogLevel::Warning, "No audio output buffer defined!");
 			}
 
-			if(ServiceLocator::LEDControlInstance){
-				ServiceLocator::LEDControlInstance->startListen();
-			}
+			setListenLed(true);
 
 			break;
 
@@ -418,9 +415,7 @@ void AudioFrontend::setMode(Mode mode){
 			abort();
 
 		case Mode::Speech:
-			if(ServiceLocator::LEDControlInstance){
-				ServiceLocator::LEDControlInstance->startListen();
-			}
+			setListenLed(true);
 
 			lastRawTranscript.clear();
 			speechReported = false;

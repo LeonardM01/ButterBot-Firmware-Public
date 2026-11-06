@@ -8,7 +8,7 @@
 #include <Services/Audio/Audio.h>
 #include <Services/ControllerState.h>
 #include <Util/ServiceLocator.h>
-#include "Audio/SpeechAudioSource.h"
+#include "Audio/Say.h"
 #include "BBStateMachine.h"
 #include "Enums.h"
 #include "IdleState.h"
@@ -18,55 +18,26 @@
 #include "Audio/VoiceCapture.h"
 #include "RCState.h"
 #include "Services/Com.h"
+#include "Util/ListenLed.h"
 #include "Util/VoiceTurnHeap.h"
 
 DEFINE_LOG(AskState)
 
 namespace {
 
+using Say::Cut;
+
 Audio* audioService(){
 	return Application::getApp()->getService<Audio>();
 }
 
-enum class Cut : uint8_t { Now, AfterCurrent };
-
-/** Says `text` through flite: cutting whatever plays, or queued behind it (a filler is never cut, decisions #5). */
-void say(const std::string& text, Cut cut){
-	Audio* audio = audioService();
-	if(audio == nullptr || text.empty() || !ServiceLocator::SpeechAudioGenInstance || !ServiceLocator::SpeechGenInstance){
-		return;
-	}
-	auto source = std::make_unique<SpeechAudioSource>(SpeechGen::InputType::Text, text);
-	if(cut == Cut::Now){
-		audio->play(ServiceLocator::SpeechAudioGenInstance.get(), std::move(source));
-	}else{
-		audio->enqueue(ServiceLocator::SpeechAudioGenInstance.get(), std::move(source));
-	}
-}
-
-void sayPhrase(Phrase phrase, Cut cut){
-	const int16_t id = Phrases::get(phrase);
-	if(id >= 0){
-		say(Phrases::map(phrase, id), cut);
-	}
-}
-
 void sayLine(AskLine line, Cut cut){
 	if(line == AskLine::DidntUnderstand){
-		sayPhrase(Phrase::ListeningTimeout, cut);
+		Say::phrase(Phrase::ListeningTimeout, cut);
 		return;
 	}
 	if(const char* text = askLineText(line, (uint32_t) rand())){
-		say(text, cut);
-	}
-}
-
-void setLed(bool on){
-	if(!ServiceLocator::LEDControlInstance) return;
-	if(on){
-		ServiceLocator::LEDControlInstance->startListen();
-	}else{
-		ServiceLocator::LEDControlInstance->stopListen();
+		Say::text(text, cut);
 	}
 }
 
@@ -74,7 +45,7 @@ void setLed(bool on){
 
 void AskState::setThinkingLed(bool on){
 	thinkingLed = on;
-	setLed(on);
+	setListenLed(on);
 }
 
 AskState::AskState(BBStateMachine* sm) : State(sm){
@@ -112,7 +83,7 @@ void AskState::start(){
 	}
 
 	setThinkingLed(true);
-	say(askFillerText((uint32_t) rand()), Cut::Now);
+	Say::text(askFillerText((uint32_t) rand()), Cut::Now);
 	if(!worker->submit(turn, wav.data(), wav.size())){
 		CMF_LOG(AskState, LogLevel::Warning, "ask: worker busy");
 		setThinkingLed(false);
@@ -197,7 +168,7 @@ void AskState::cancel(bool sayAbort){
 		audio->stop(); // also drops a reply queued behind the filler
 	}
 	if(sayAbort){
-		sayPhrase(Phrase::ListenAbort, Cut::Now);
+		Say::phrase(Phrase::ListenAbort, Cut::Now);
 	}
 	sendPhase(ListenData::Phase::Abort);
 }

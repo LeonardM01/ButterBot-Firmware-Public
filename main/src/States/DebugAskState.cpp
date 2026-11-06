@@ -9,6 +9,7 @@
 #include "BBStateMachine.h"
 #include "Debug/DebugAsk.h"
 #include "Net/AskWorker.h"
+#include "Util/ListenLed.h"
 #include "Enums.h"
 #include "IdleState.h"
 #include "RCState.h"
@@ -31,19 +32,15 @@ DebugAskState::DebugAskState(BBStateMachine* sm) : State(sm){
 		return;
 	}
 
-	if(ServiceLocator::LEDControlInstance){
-		ServiceLocator::LEDControlInstance->startListen();
-		ledBlinking = true;
-	}
+	setListenLed(true);
+	ledBlinking = true;
 }
 
 DebugAskState::~DebugAskState(){
 	// Normally the turn has cleaned up already: tick() leaves only once it has. This is the backstop for any
 	// other way out, so the next state never finds a reply still playing behind its back.
 	DebugAsk::stop(ExitWaitMs);
-	if(ServiceLocator::LEDControlInstance){
-		ServiceLocator::LEDControlInstance->stopListen();
-	}
+	setListenLed(false);
 }
 
 void DebugAskState::tick(float deltaTime){
@@ -51,7 +48,7 @@ void DebugAskState::tick(float deltaTime){
 	// returned), so whatever comes next (a listen turn from Idle, RC mode) finds the AFE and Audio free.
 	// Blink until the reply is heard, as a voice turn does.
 	if(ledBlinking && ServiceLocator::AskWorkerInstance && ServiceLocator::AskWorkerInstance->replyAudible()){
-		ServiceLocator::LEDControlInstance->stopListen();
+		setListenLed(false);
 		ledBlinking = false;
 	}
 	if(sm->isTransitionPending() || DebugAsk::poll()) return;

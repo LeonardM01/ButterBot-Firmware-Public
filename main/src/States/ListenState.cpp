@@ -1,6 +1,7 @@
 #include "ListenState.h"
 #include "BBStateMachine.h"
 #include "Audio/AudioFrontend.h"
+#include "Audio/Say.h"
 #include "Audio/SpeechAudioGen.h"
 #include "Audio/SpeechAudioSource.h"
 #include "Audio/SpeechGen.h"
@@ -38,30 +39,6 @@
 #include "Util/VoiceTurnHeap.h"
 
 DEFINE_LOG(ListenState)
-
-static void playTextBlocking(const Application* app, const std::string& text){
-    if(app == nullptr || text.empty()){
-        return;
-    }
-
-    Audio* audio = app->getService<Audio>();
-    if(audio == nullptr || !ServiceLocator::SpeechAudioGenInstance || !ServiceLocator::SpeechGenInstance){
-        return;
-    }
-
-    auto source = std::make_unique<SpeechAudioSource>(SpeechGen::InputType::Text, text);
-    audio->play(ServiceLocator::SpeechAudioGenInstance.get(), std::move(source));
-    audio->waitEnd(portMAX_DELAY);
-}
-
-static void playPhraseBlocking(const Application* app, Phrase phrase){
-    const int16_t id = Phrases::get(phrase);
-    if(id < 0){
-        return;
-    }
-
-    playTextBlocking(app, Phrases::map(phrase, id));
-}
 
 static const char* TAG = "ListenState";
 
@@ -305,9 +282,9 @@ ListenState::~ListenState(){
     }
 
     if(refused){
-        playTextBlocking(app, askLineText(AskLine::ThoughtsLost, (uint32_t) rand()));
+        Say::textBlocking(askLineText(AskLine::ThoughtsLost, (uint32_t) rand()));
     }else if(timedOut){
-        playPhraseBlocking(app, Phrase::ListeningTimeout);
+        Say::phraseBlocking(Phrase::ListeningTimeout);
     }
 
     // A question handed to AskState is still the same turn; it ends there.
@@ -396,10 +373,7 @@ void ListenState::onCommand(Ctrl::Command cmd) {
 
 void ListenState::aborted(){
 	if(ServiceLocator::ScenarioRoutineServiceInstance){
-		if(Audio* audio = ApplicationStatics::getApplication()->getService<Audio>()){
-			audio->stop();
-			audio->play(ServiceLocator::SpeechAudioGenInstance.get(), std::make_unique<SpeechAudioSource>(SpeechGen::InputType::Text, Phrases::map(Phrase::ListenAbort, Phrases::get(Phrase::ListenAbort))));
-		}
+		Say::phrase(Phrase::ListenAbort, Say::Cut::Now);
 	}
 
     if(com == nullptr){
