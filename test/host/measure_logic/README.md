@@ -5,6 +5,7 @@ Unity tests for the pure logic of the measurement build (#20). They build with t
 Covered code is in `main/src/Debug/`:
 
 - `PowerPress`: reads a power-button hold in Idle as short (listen), medium (debug ask turn) or ignored.
+- `MeasureFormat`: the greppable `BBMEASURE ask ...` summary line, with KiB/s throughput.
 
 The debug turn itself (`DebugAsk`, `DebugAskState`) needs the robot; see `docs/measurement-build.md`.
 
