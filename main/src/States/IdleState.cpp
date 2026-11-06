@@ -11,6 +11,10 @@
 #include "ScenarioRoutineMappings.h"
 #include "Services/Com.h"
 #include "RCState.h"
+#if BB_DEBUG_ASK_BUILD
+#include "DebugAskState.h"
+#include "Debug/PowerPress.h"
+#endif
 #include "Routines/RambleRoutine.h"
 #include "Routines/ObserveRoutine.h"
 #include "Routines/PersonRoutine.h"
@@ -408,6 +412,16 @@ void IdleState::onButtonEvent(int button, ISRButtonInput::Action action){
 	}
 
 	buttonHeld = false;
+
+#if BB_DEBUG_ASK_BUILD
+	// Measurement build: a 1.0-2.5 s hold runs the debug ask turn (docs/measurement-build.md).
+	if(classifyPowerPress(millis() - lastBtnPressTime) == PowerPress::Medium){
+		if(canStartInstantRoutine()){
+			sm->transitionTo<DebugAskState>();
+		}
+		return;
+	}
+#endif
 
 	if(millis() - lastBtnPressTime > MaximumBtnHoldForTransition){
 		return;
