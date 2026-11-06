@@ -951,6 +951,8 @@ void AudioFrontend::reportPhrase(bool recognized, int index, const std::string& 
 }
 
 int AudioFrontend::fuzzyMatch(const std::string& transcript){
+	// The transcript is the user's speech: logs carry the phrase it was compared with and the scores, never
+	// the transcript itself (S0.5, #22 acceptance item 12).
 	const std::string stripped = stripSpaces(transcript.c_str());
 	if(stripped.empty() || speechPhrases.empty()){
 		return -1;
@@ -978,8 +980,8 @@ int AudioFrontend::fuzzyMatch(const std::string& transcript){
 	}
 
 	if(best < 0){
-		CMF_LOG(AudioFrontend, LogLevel::Info, "Fuzzy match rejected: transcript '%s', best '%s' [%s], core '%s', score %.3f, threshold %.3f, core fit %.3f (max %.3f)",
-			transcript.c_str(), speechPhrases[rawBest].string, speechPhrases[rawBest].phonemes,
+		CMF_LOG(AudioFrontend, LogLevel::Info, "Fuzzy match rejected: best '%s' [%s], core '%s', score %.3f, threshold %.3f, core fit %.3f (max %.3f)",
+			speechPhrases[rawBest].string, speechPhrases[rawBest].phonemes,
 			speechPhrases[rawBest].fuzzyCore ? speechPhrases[rawBest].fuzzyCore : "",
 			scores[rawBest], speechPhrases[rawBest].fuzzyThreshold, coreFits[rawBest], CoreMatchMax);
 		return -1;
@@ -1007,15 +1009,15 @@ int AudioFrontend::fuzzyMatch(const std::string& transcript){
 
 	const float bestThreshold = speechPhrases[best].fuzzyThreshold;
 	if(scores[best] >= bestThreshold){
-		CMF_LOG(AudioFrontend, LogLevel::Info, "Fuzzy match rejected: transcript '%s', best '%s' [%s], core '%s', score %.3f above phrase threshold %.3f",
-			transcript.c_str(), speechPhrases[best].string, speechPhrases[best].phonemes,
+		CMF_LOG(AudioFrontend, LogLevel::Info, "Fuzzy match rejected: best '%s' [%s], core '%s', score %.3f above phrase threshold %.3f",
+			speechPhrases[best].string, speechPhrases[best].phonemes,
 			speechPhrases[best].fuzzyCore ? speechPhrases[best].fuzzyCore : "",
 			scores[best], bestThreshold);
 		return -1;
 	}
 
-	CMF_LOG(AudioFrontend, LogLevel::Info, "Fuzzy matched: transcript '%s', phrase '%s' [%s], core '%s', score %.3f, threshold %.3f, core fit %.3f (max %.3f)",
-		transcript.c_str(), speechPhrases[best].string, speechPhrases[best].phonemes,
+	CMF_LOG(AudioFrontend, LogLevel::Info, "Fuzzy matched: phrase '%s' [%s], core '%s', score %.3f, threshold %.3f, core fit %.3f (max %.3f)",
+		speechPhrases[best].string, speechPhrases[best].phonemes,
 		speechPhrases[best].fuzzyCore ? speechPhrases[best].fuzzyCore : "",
 		scores[best], bestThreshold, coreFits[best], CoreMatchMax);
 	return best;
