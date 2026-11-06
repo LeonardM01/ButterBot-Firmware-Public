@@ -8,6 +8,7 @@
 #include <Util/ServiceLocator.h>
 #include "BBStateMachine.h"
 #include "Debug/DebugAsk.h"
+#include "Net/AskWorker.h"
 #include "Enums.h"
 #include "IdleState.h"
 #include "RCState.h"

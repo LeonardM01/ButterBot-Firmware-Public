@@ -20,7 +20,8 @@ class WiFiService;
  * measurement build's debug turn.
  *
  * Created once at boot with its AskClient and pass-through generator, before any turn fragments internal RAM
- * (M8), and never deleted. Its stack and TCB are in PSRAM, so it costs no internal RAM: allowed by M3 because
+ * (M8), and never deleted: its task loops for the whole runtime on `this`, so the destructor is deleted and
+ * the task is never ended (M4 has no WithCaps object to free). Its stack and TCB are in PSRAM, so it costs no internal RAM: allowed by M3 because
  * it only ever runs AskClient::ask() (lwIP, esp_http_client, mbedTLS, Audio), never NVS, SPIFFS or a flash
  * write; callers read files on their own task and pass the bytes in.
  *
@@ -42,9 +43,15 @@ public:
 	/** Creates the task. Check ok(); without it every submit() fails and the voice turn says its thoughts got lost. */
 	AskWorker(Audio& audio, const WiFiService* wifi);
 
+	~AskWorker() = delete;
+
 	AskWorker(const AskWorker&) = delete;
 
 	AskWorker& operator=(const AskWorker&) = delete;
+
+	AskWorker(AskWorker&&) = delete;
+
+	AskWorker& operator=(AskWorker&&) = delete;
 
 	bool ok() const{ return task != nullptr; }
 

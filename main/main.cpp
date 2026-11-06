@@ -59,6 +59,8 @@
 #include <Phrases.h>
 #include "Audio/SpeechAudioSource.h"
 #include "Net/AskClient.h"
+#include "Net/AskWorker.h"
+#include "Audio/VoiceCapture.h"
 #include "Util/EfuseMeta.h"
 #include "JigHWTest/JigHWTest.h"
 #include "Services/GasConfigureService.h"
@@ -335,11 +337,12 @@ protected:
 
 		// Voice turn (#22): allocated once here, before any turn can fragment internal RAM, and reused (M8).
 		// Both live in PSRAM: the 320,044 B capture buffer and the ask worker's stack and TCB.
-		ServiceLocator::VoiceCaptureInstance = VoiceCapture::create();
+		// Both are kept for the whole runtime and never freed (see ServiceLocator).
+		ServiceLocator::VoiceCaptureInstance = VoiceCapture::create().release();
 		if(!ServiceLocator::VoiceCaptureInstance){
 			CMF_LOG(Butterbot, LogLevel::Error, "No PSRAM for the voice capture buffer: questions can't be asked");
 		}
-		ServiceLocator::AskWorkerInstance = std::make_unique<AskWorker>(*audio, ServiceLocator::WiFiServiceInstance);
+		ServiceLocator::AskWorkerInstance = new AskWorker(*audio, ServiceLocator::WiFiServiceInstance);
 
 		EventBag* eventBag = registerService<EventBag>();
 

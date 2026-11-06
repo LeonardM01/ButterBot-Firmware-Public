@@ -11,6 +11,8 @@
 #include <Services/Audio/Audio.h>
 #include "Audio/AudioFrontend.h"
 #include "Net/AskClient.h"
+#include "Net/AskWorker.h"
+#include "Audio/VoiceCapture.h"
 #include "Util/Elapsed.h"
 #include "Util/HeapSnapshot.h"
 #include "Util/ServiceLocator.h"
@@ -79,7 +81,7 @@ size_t loadQuestion(uint8_t* buf, size_t cap){
 }
 
 void finish(){
-	if(AskWorker* worker = ServiceLocator::AskWorkerInstance.get()){
+	if(AskWorker* worker = ServiceLocator::AskWorkerInstance){
 		printf("BBMEASURE stack task=AskWorker size=%u min_free=%u\n", (unsigned) AskWorker::StackBytes, (unsigned) worker->stackMinFree());
 	}
 	if(turn.monitoring){
@@ -97,8 +99,8 @@ void finish(){
  */
 void prepareAndSubmit(){
 	AudioFrontend* afe = Application::getApp()->getService<AudioFrontend>();
-	VoiceCapture* capture = ServiceLocator::VoiceCaptureInstance.get();
-	AskWorker* worker = ServiceLocator::AskWorkerInstance.get();
+	VoiceCapture* capture = ServiceLocator::VoiceCaptureInstance;
+	AskWorker* worker = ServiceLocator::AskWorkerInstance;
 	if(afe == nullptr || capture == nullptr || worker == nullptr){
 		printf("BBMEASURE turn error=missing_service\n");
 		finish();

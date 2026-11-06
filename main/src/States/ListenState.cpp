@@ -32,6 +32,8 @@
 #include "Routines/IRActionRoutine.h"
 #include "ScenarioRoutineMappings.h"
 #include "Net/AskLines.h"
+#include "Net/AskWorker.h"
+#include "Audio/VoiceCapture.h"
 #include "Util/VoiceTurnGate.h"
 #include "Util/VoiceTurnHeap.h"
 
@@ -200,7 +202,7 @@ ListenState::ListenState(BBStateMachine* sm) : State(sm){
     // - the ask worker still reads the capture buffer, so recording now would overwrite its upload (C7). Only
     //   this task can make the worker busy again (submit()), so the check holds for the whole constructor;
     // - too little internal RAM for AFE + MultiNet, whose load would reboot the robot (decisions #9).
-    const AskWorker* worker = ServiceLocator::AskWorkerInstance.get();
+    const AskWorker* worker = ServiceLocator::AskWorkerInstance;
     const HeapSnapshot idle = VoiceTurnHeap::beginTurn();
     switch(VoiceTurnGate::check(worker != nullptr && worker->busy(), idle.intFree, idle.intLargest)){
         case VoiceTurnGate::Verdict::Go:
@@ -285,7 +287,7 @@ ListenState::ListenState(BBStateMachine* sm) : State(sm){
         sm->bindState(audioFrontend->onPhrase, this, &ListenState::onPhrase);
         // Record the question too, into the boot-time buffer (#22); the worker is idle (checked above).
         // setMode(Off) detaches it.
-        if(VoiceCapture* capture = ServiceLocator::VoiceCaptureInstance.get()){
+        if(VoiceCapture* capture = ServiceLocator::VoiceCaptureInstance){
             capture->begin();
             audioFrontend->setCapture(&capture->recorder());
         }
@@ -322,7 +324,7 @@ void ListenState::onPhrase(bool recognized, int index, const std::string& transc
 	// Runs on the AFE proc task. Do NOT stop the AFE or play audio here
     if(!recognized){
         // Sizes only, never the transcript (S0.5).
-        VoiceCapture* capture = ServiceLocator::VoiceCaptureInstance.get();
+        VoiceCapture* capture = ServiceLocator::VoiceCaptureInstance;
         const bool question = capture != nullptr && capture->recorder().state() == UtteranceRecorder::State::Done && capture->recorder().bytes() > 0;
     	CMF_LOG(ListenState, LogLevel::Info, "Listen result: no command, question=%d, recorded %u B",
 			question, capture != nullptr ? (unsigned) capture->recorder().bytes() : 0u);

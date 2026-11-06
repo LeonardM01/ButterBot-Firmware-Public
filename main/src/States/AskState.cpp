@@ -14,6 +14,8 @@
 #include "IdleState.h"
 #include "Net/AskClient.h"
 #include "Net/AskLines.h"
+#include "Net/AskWorker.h"
+#include "Audio/VoiceCapture.h"
 #include "RCState.h"
 #include "Services/Com.h"
 #include "Util/VoiceTurnHeap.h"
@@ -100,8 +102,8 @@ void AskState::start(){
 		return;
 	}
 
-	VoiceCapture* capture = ServiceLocator::VoiceCaptureInstance.get();
-	AskWorker* worker = ServiceLocator::AskWorkerInstance.get();
+	VoiceCapture* capture = ServiceLocator::VoiceCaptureInstance;
+	AskWorker* worker = ServiceLocator::AskWorkerInstance;
 	const std::span<const uint8_t> wav = capture != nullptr ? capture->wav() : std::span<const uint8_t>{};
 	if(worker == nullptr || wav.empty()){
 		CMF_LOG(AskState, LogLevel::Warning, "ask: no %s", worker == nullptr ? "worker" : "recording");
@@ -126,7 +128,7 @@ AskState::~AskState(){
 	// way out (BBStateMachine::interrupt()). The worker reads the capture buffer until it is idle, so the state
 	// never lets go before that (C7), however long it takes: the abort is sticky and AskClient notices it
 	// within about 0.5 s, or once its connect deadline has passed during DNS and connect.
-	const AskWorker* worker = ServiceLocator::AskWorkerInstance.get();
+	const AskWorker* worker = ServiceLocator::AskWorkerInstance;
 	if(worker != nullptr && worker->busy()){
 		AskClient::abortInFlight();
 		while(!worker->waitIdle(ExitWaitMs)){
