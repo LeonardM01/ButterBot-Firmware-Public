@@ -104,8 +104,10 @@ public:
 	/**
 	 * Loads AFE + MultiNet (~3.5 MB PSRAM, ~17 KB internal steady). While it loads, plain malloc() goes to PSRAM
 	 * first, so the load's many small allocations don't drain internal RAM (docs/voice-turn-memory.md).
+	 * Only while the mode is Off. False when the models could not be loaded; nothing is left half-loaded then.
+	 * An out-of-memory reboots instead (CONFIG_HEAP_ABORT_WHEN_ALLOCATION_FAILS, M11).
 	 */
-	void loadModel();
+	bool loadModel();
 	void unloadModel();
 
 	/**
@@ -194,6 +196,13 @@ private:
 
 	esp_mn_iface_t* multinet_handle = nullptr;
 	model_iface_data_t* multinet_data = nullptr;
+	bool mnCommandsAllocated = false;
+
+	/** loadModel()'s steps. False at the first one that fails, leaving what was made for releaseModels(). */
+	bool createModels();
+
+	/** Frees whatever createModels() made, in reverse order; safe on a partial load. */
+	void releaseModels();
 
 	//MultiNet speech recognition buffer size
 	static constexpr int32_t MultinetDuration = 4000; //[ms]

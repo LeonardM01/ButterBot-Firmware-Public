@@ -1,4 +1,5 @@
 #include "AudioFrontend.h"
+#include <esp_err.h>
 #include <esp_heap_caps.h>
 #include <esp_timer.h>
 #include <algorithm>
@@ -13,6 +14,32 @@
 DEFINE_LOG(AudioFrontend)
 
 namespace {
+	/**
+	 * While alive, plain malloc() of any size prefers PSRAM; the destructor restores
+	 * CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL on every way out of the scope (C6).
+	 *
+	 * Why the load needs it: on the robot every AFE + MultiNet load drove internal RAM down to 59-319 B free,
+	 * whatever it started from. esp-sr's MultiNet, VAD net, FST, G2P and dl libs call plain malloc()/calloc()
+	 * (`nm -u` on the esp32s3 archives), and with the 256 B limit their small blocks fill internal RAM first; the next
+	 * must-be-internal allocation (a FreeRTOS mutex) then fails and reboots. afe_config_t::memory_alloc_mode
+	 * steers only the AFE's own buffers and MultiNet has no such knob, so they can't do this.
+	 *
+	 * It is global for ~770 ms: other tasks' plain malloc() lands in PSRAM too. heap_caps_malloc_default()
+	 * already falls back to PSRAM once internal RAM is short, which every #20 load caused, so no correct code
+	 * relies on plain malloc() for DMA, ISR or cache-off memory; IDF drivers and FreeRTOS ask for caps
+	 * explicitly. See docs/voice-turn-memory.md, "The extmem window".
+	 */
+	class ExtmemFirst {
+	public:
+		ExtmemFirst(){ heap_caps_malloc_extmem_enable(0); }
+
+		~ExtmemFirst(){ heap_caps_malloc_extmem_enable(CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL); }
+
+		ExtmemFirst(const ExtmemFirst&) = delete;
+
+		ExtmemFirst& operator=(const ExtmemFirst&) = delete;
+	};
+
 	constexpr float FuzzyMargin = 0.1f;
 	constexpr float ShortWordWeight = 0.5f;
 	constexpr size_t ShortWordMaxPhonemes = 4;
@@ -521,32 +548,58 @@ void AudioFrontend::waitAtGate(EventBits_t atGateBit){
 	xEventGroupClearBits(taskGate, atGateBit);
 }
 
-void AudioFrontend::loadModel(){
+bool AudioFrontend::loadModel(){
 	if(afe_handle){
 		CMF_LOG(AudioFrontend, LogLevel::Error, "Model already loaded!");
-		return;
+		return true;
 	}
 
 	if(currentMode != Mode::Off){
 		CMF_LOG(AudioFrontend, LogLevel::Error, "Cannot load model while AFE is running!");
-		return;
+		return false;
 	}
 
 	uint32_t startTime = millis();
 
-	// On the robot every load drove internal RAM down to 59-319 B free, whatever it started from: with
-	// SPIRAM_MALLOC_ALWAYSINTERNAL=256, esp-sr's small malloc()s fill internal RAM first and fall back to PSRAM
-	// only once it is gone, and the next must-be-internal allocation (a FreeRTOS mutex) then fails and reboots
-	// (#20, docs/voice-turn-memory.md). Send plain malloc() to PSRAM first for the length of the load; explicit
-	// MALLOC_CAP_INTERNAL/DMA requests are unaffected. Other tasks' small mallocs in these ~770 ms land in PSRAM
-	// too, which costs only speed.
-	heap_caps_malloc_extmem_enable(0);
+	bool created = false;
+	{
+		const ExtmemFirst window;
+		created = createModels();
+	}
+	if(!created){
+		// With CONFIG_HEAP_ABORT_WHEN_ALLOCATION_FAILS=y an out-of-memory reboots inside esp-sr instead (M11), so
+		// this is a missing model or a refused config. Nothing stays half-loaded.
+		releaseModels();
+		CMF_LOG(AudioFrontend, LogLevel::Error, "Speech models not loaded");
+		return false;
+	}
 
+	CMF_LOG(AudioFrontend, LogLevel::Debug, "AFE time: %d ms", (int)millis() - (int)startTime);
+
+	const size_t feedBufferLength = (size_t)afe_handle->get_feed_chunksize(afe_data) * afe_handle->get_channel_num(afe_data);
+	CMF_LOG(AudioFrontend, LogLevel::Debug, "feedBuffer size: %zu (FeedBufferSize: %zu)", feedBufferLength, FeedBufferSize);
+	if(feedBufferLength != FeedBufferSize){
+		CMF_LOG(AudioFrontend, LogLevel::Warning, "AFE feed chunk size mismatch: expected %zu, got %zu", FeedBufferSize, feedBufferLength);
+	}
+	return true;
+}
+
+bool AudioFrontend::createModels(){
 	models = esp_srmodel_init("model"); // partition label defined in partitions.csv
+	if(models == nullptr){
+		CMF_LOG(AudioFrontend, LogLevel::Error, "No speech models in the model partition");
+		return false;
+	}
 
 	afe_config = afe_config_init("MM", models, AFE_TYPE_SR, AFE_MODE_HIGH_PERF);
+	if(afe_config == nullptr){
+		CMF_LOG(AudioFrontend, LogLevel::Error, "AFE config refused");
+		return false;
+	}
 	afe_config->wakenet_init = false;
 	afe_config->afe_ringbuf_size = 50;
+	// Covers only the AFE's own buffers. It was already set in #20, whose loads still drained internal RAM: see
+	// ExtmemFirst for the rest.
 	afe_config->memory_alloc_mode = AFE_MEMORY_ALLOC_MORE_PSRAM;
 
 	//Acoustic echo cancellation
@@ -573,32 +626,52 @@ void AudioFrontend::loadModel(){
 	afe_config->agc_target_level_dbfs = -3; //Default
 
 	afe_handle = esp_afe_handle_from_config(afe_config);
+	if(afe_handle == nullptr){
+		CMF_LOG(AudioFrontend, LogLevel::Error, "No AFE for this config");
+		return false;
+	}
 	afe_data = afe_handle->create_from_config(afe_config);
+	if(afe_data == nullptr){
+		CMF_LOG(AudioFrontend, LogLevel::Error, "AFE not created");
+		return false;
+	}
 
 	//Multinet (speech recognition)
 	char* mn_name = esp_srmodel_filter(models, ESP_MN_PREFIX, ESP_MN_ENGLISH);
+	if(mn_name == nullptr){
+		CMF_LOG(AudioFrontend, LogLevel::Error, "No English MultiNet model");
+		return false;
+	}
 	CMF_LOG(AudioFrontend, LogLevel::Info, "multinet:%s", mn_name);
 	multinet_handle = esp_mn_handle_from_name(mn_name);
+	if(multinet_handle == nullptr){
+		CMF_LOG(AudioFrontend, LogLevel::Error, "No MultiNet handle");
+		return false;
+	}
 
 	multinet_data = multinet_handle->create(mn_name, MultinetDuration);
-	multinet_handle->set_det_threshold(multinet_data, MultinetDetThreshold);
+	if(multinet_data == nullptr){
+		CMF_LOG(AudioFrontend, LogLevel::Error, "MultiNet not created");
+		return false;
+	}
+	// esp-sr documents no return value for this; the threshold is a constant inside its 0.0-0.9999 range.
+	(void) multinet_handle->set_det_threshold(multinet_data, MultinetDetThreshold);
 
-	ESP_ERROR_CHECK(esp_mn_commands_alloc(multinet_handle, multinet_data));
-	ESP_ERROR_CHECK(esp_mn_commands_clear());
+	// Runtime, not init (E2): log and refuse the turn instead of ESP_ERROR_CHECK's abort.
+	if(const esp_err_t err = esp_mn_commands_alloc(multinet_handle, multinet_data); err != ESP_OK){
+		CMF_LOG(AudioFrontend, LogLevel::Error, "MultiNet command list: %s", esp_err_to_name(err));
+		return false;
+	}
+	mnCommandsAllocated = true;
+	if(const esp_err_t err = esp_mn_commands_clear(); err != ESP_OK){
+		CMF_LOG(AudioFrontend, LogLevel::Error, "MultiNet command clear: %s", esp_err_to_name(err));
+		return false;
+	}
 	auto err = esp_mn_commands_update();
 	if(err != nullptr){
 		CMF_LOG(AudioFrontend, Error, "%d phrases with errors", err->num);
 	}
-
-	heap_caps_malloc_extmem_enable(CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL);
-
-	CMF_LOG(AudioFrontend, LogLevel::Debug, "AFE time: %d ms", (int)millis() - (int)startTime);
-
-	const size_t feedBufferLength = (size_t)afe_handle->get_feed_chunksize(afe_data) * afe_handle->get_channel_num(afe_data);
-	CMF_LOG(AudioFrontend, LogLevel::Debug, "feedBuffer size: %zu (FeedBufferSize: %zu)", feedBufferLength, FeedBufferSize);
-	if(feedBufferLength != FeedBufferSize){
-		CMF_LOG(AudioFrontend, LogLevel::Warning, "AFE feed chunk size mismatch: expected %zu, got %zu", FeedBufferSize, feedBufferLength);
-	}
+	return true;
 }
 
 void AudioFrontend::unloadModel(){
@@ -613,19 +686,28 @@ void AudioFrontend::unloadModel(){
 
 	uint32_t startTime = millis();
 
-	ESP_ERROR_CHECK(esp_mn_commands_free());
+	releaseModels();
+
+	CMF_LOG(AudioFrontend, LogLevel::Debug, "unload time: %d ms", (int)millis() - (int)startTime);
+}
+
+void AudioFrontend::releaseModels(){
+	if(mnCommandsAllocated){
+		ESP_ERROR_CHECK_WITHOUT_ABORT(esp_mn_commands_free());
+		mnCommandsAllocated = false;
+	}
 
 	if(multinet_handle && multinet_data){
 		multinet_handle->destroy(multinet_data);
-		multinet_handle = nullptr;
-		multinet_data = nullptr;
 	}
+	multinet_handle = nullptr;
+	multinet_data = nullptr;
 
 	if(afe_handle && afe_data){
 		afe_handle->destroy(afe_data);
-		afe_handle = nullptr;
-		afe_data = nullptr;
 	}
+	afe_handle = nullptr;
+	afe_data = nullptr;
 
 	if(afe_config){
 		afe_config_free(afe_config);
@@ -636,8 +718,6 @@ void AudioFrontend::unloadModel(){
 		esp_srmodel_deinit(models);
 		models = nullptr;
 	}
-
-	CMF_LOG(AudioFrontend, LogLevel::Debug, "unload time: %d ms", (int)millis() - (int)startTime);
 }
 
 #if BB_DEBUG_ASK_BUILD

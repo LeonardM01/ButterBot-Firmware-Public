@@ -106,7 +106,11 @@ void prepareAndSubmit(){
 	}
 
 	const int64_t tLoad = nowUs();
-	afe->loadModel(); // AFE + MultiNet, as ListenState does
+	if(!afe->loadModel()){ // AFE + MultiNet, as ListenState does
+		printf("BBMEASURE turn error=model_load_failed\n");
+		finish();
+		return;
+	}
 	afe->resetGlitchMeter();
 	afe->setMode(AudioFrontend::Mode::VAD);
 	const uint32_t loadMs = msSince(tLoad);

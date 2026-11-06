@@ -21,7 +21,7 @@ private:
     // Written on the AFE proc task (onPhrase) or in the constructor, read in the destructor.
     std::atomic<bool> timedOut{false};
     std::atomic<bool> askRequested{false}; // the recorded question goes to AskState; the turn goes on there
-    bool refused = false;                  // the internal-RAM guard refused the model load
+    bool refused = false;                  // the models were not loaded (internal-RAM guard or a failed load)
 
     void onRC();
     void onPhrase(bool recognized, int index, const std::string& transcript, float confidence);

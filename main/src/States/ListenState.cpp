@@ -241,7 +241,12 @@ ListenState::ListenState(BBStateMachine* sm) : State(sm){
         return;
     }
 
-	audioFrontend->loadModel();
+    if(!audioFrontend->loadModel()){
+        // Same refusal as the guard's: the line plays in the destructor, then Idle.
+        refused = true;
+        sm->transitionTo<IdleState>();
+        return;
+    }
     VoiceTurnHeap::mark(VoiceTurnHeap::Point::Loaded);
 
     audioFrontend->setMode(AudioFrontend::Mode::Off);
