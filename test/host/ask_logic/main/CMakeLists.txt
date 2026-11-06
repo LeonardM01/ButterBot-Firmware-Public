@@ -4,6 +4,8 @@ set(NET "${CMAKE_CURRENT_SOURCE_DIR}/../../../../main/src/Net")
 idf_component_register(SRCS "test_main.cpp"
                             "test_ask_outcome.cpp"
                             "test_url_policy.cpp"
+                            "test_wav_stream_parser.cpp"
                             "${NET}/AskOutcome.cpp"
+                            "${NET}/WavStreamParser.cpp"
                        INCLUDE_DIRS "${NET}"
                        REQUIRES unity)
