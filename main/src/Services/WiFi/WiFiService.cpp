@@ -37,7 +37,7 @@ WiFiService::WiFiService() noexcept{
 	ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED, &WiFiService::onEvent, this, &wifiHandler));
 	ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT, ESP_EVENT_ANY_ID, &WiFiService::onEvent, this, &ipHandler));
 
-	wifi->startStation(/*dhcpClient=*/true, WIFI_STORAGE_RAM);
+	wifi->startStation(WiFi::StationAddressing::Dhcp, WIFI_STORAGE_RAM);
 
 	// Modem sleep is required for Wi-Fi and BLE coexistence.
 	esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
