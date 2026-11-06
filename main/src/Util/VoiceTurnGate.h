@@ -11,13 +11,19 @@
 namespace VoiceTurnGate {
 
 /**
- * Idle internal RAM the model load is refused below (decisions #9). A safety net, not a proven margin: see
- * docs/voice-turn-memory.md, "Guard before the model load". Free: above every idle value a #20 load started
- * from (27,268-28,703 B), the crash at 27,907 B included. Largest: the lowest block a #20 load succeeded from.
- * Calibrate both from the robot's `at=idle` / `at=loaded int_min` lines.
+ * Idle internal RAM a turn is refused below (decisions #9), calibrated from four question turns on the robot
+ * (docs/voice-turn-memory.md, "Guard before the model load"). It can't certify a turn: it refuses one that
+ * would start outside the range those turns ran in.
+ * - Free: a turn took up to 38,116 B from idle (41,135 -> low 3,019). 38,912 (38 KiB) leaves such a turn
+ *   796 B even if that demand is fixed, and sits 1,823 B under the lowest idle seen (40,735; idle varied by
+ *   400 B). It refuses #20's reboot state (27,907 free).
+ * - Largest: the load carved up to 7,168 B out of the largest block (26,624 -> 19,456). 16,384 (16 KiB) is
+ *   over twice that and 9,216 B under the lowest idle largest (25,600). It refuses #20's 12,288.
+ * Recalibrate from the `at=idle` and `int_min` lines once local commands, cancels, RC and a connected phone
+ * have been measured.
  */
-inline constexpr size_t MinIntFree = 30720;
-inline constexpr size_t MinIntLargest = 7680;
+inline constexpr size_t MinIntFree = 38912;
+inline constexpr size_t MinIntLargest = 16384;
 
 enum class Verdict : uint8_t {
 	Go,
