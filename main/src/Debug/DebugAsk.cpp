@@ -102,7 +102,7 @@ private:
 	PcmPassthroughGen generator;
 	std::optional<AskClient> askClient; // created once on the worker task, never destroyed
 
-	// Filled by the AskConfig::onPhase hook; printed after the turn so UART output doesn't skew the timings.
+	// Filled by the AskClient phase hook; printed after the turn so UART output doesn't skew the timings.
 	HeapSnapshot connected, playing, downloaded;
 
 	static void taskMain(void* arg){
@@ -114,17 +114,16 @@ private:
 		}
 	}
 
-	static void onPhase(AskPhase phase, void* ctx){
-		auto* self = static_cast<Worker*>(ctx);
+	void onPhase(AskPhase phase){
 		switch(phase){
 			case AskPhase::Connected:
-				self->connected = snapshot();
+				connected = snapshot();
 				break;
 			case AskPhase::Playing:
-				self->playing = snapshot();
+				playing = snapshot();
 				break;
 			case AskPhase::Downloaded:
-				self->downloaded = snapshot();
+				downloaded = snapshot();
 				break;
 		}
 	}
@@ -183,10 +182,7 @@ private:
 			printf("BBMEASURE turn error=%s waited_ms=%u\n", stopRequested() ? "aborted" : "offline", (unsigned) msSince(tStart));
 		}else{
 			if(!askClient){
-				AskConfig cfg;
-				cfg.onPhase = &Worker::onPhase;
-				cfg.phaseCtx = this;
-				askClient.emplace(*audio, generator, cfg);
+				askClient.emplace(*audio, generator, [this](AskPhase phase){ onPhase(phase); });
 			}
 			runLoadedTurn(*afe);
 		}

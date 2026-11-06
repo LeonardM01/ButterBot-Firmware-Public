@@ -5,6 +5,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <freertos/FreeRTOS.h>
 #include <freertos/ringbuf.h>
@@ -21,6 +22,9 @@
  */
 class PcmStream {
 public:
+	/** 16 kHz mono s16. */
+	static constexpr uint32_t BytesPerSecond = 16000 * 2;
+
 	struct Stats {
 		uint32_t underruns;   // times playback ran dry after real audio had started
 		uint32_t starvedMs;   // total silence inserted because of underruns
@@ -58,8 +62,25 @@ public:
 
 	Stats stats() const;
 
+	enum class PlaybackEnd : uint8_t {
+		Played,   // everything written was played
+		Replaced, // another sound took over playback before the end
+		Stopped,  // stopRequested() returned true; playback was cancelled
+		TimedOut, // playback took longer than the buffered audio plus a margin; cancelled
+	};
+
+	/**
+	 * After finish(), waits until Audio is done with the stream. Polls `stopRequested` and cancels
+	 * playback when it returns true. Gives up, cancelling playback, after the buffered audio's
+	 * duration plus PlaybackMarginMs, so a stuck Audio task can't hold the caller forever.
+	 */
+	PlaybackEnd waitPlayed(const std::function<bool()>& stopRequested);
+
 private:
 	friend class StreamingPcmSource;
+
+	static constexpr uint32_t PlaybackMarginMs = 3000;
+	static constexpr uint32_t PlaybackPollMs = 20;
 
 	explicit PcmStream(RingbufHandle_t ring);
 

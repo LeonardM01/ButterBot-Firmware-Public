@@ -1,6 +1,7 @@
 #include "StreamingPcmSource.h"
 #include <cstring>
 #include <esp_heap_caps.h>
+#include <freertos/task.h>
 #include "Util/Elapsed.h"
 
 namespace {
@@ -62,6 +63,27 @@ bool PcmStream::consumerGone() const{
 
 PcmStream::Stats PcmStream::stats() const{
 	return {underruns, starvedUs / 1000, bytesPlayed};
+}
+
+PcmStream::PlaybackEnd PcmStream::waitPlayed(const std::function<bool()>& stopRequested){
+	const uint32_t budgetMs = (uint32_t) ((uint64_t) buffered() * 1000 / BytesPerSecond) + PlaybackMarginMs;
+	const int64_t tStart = nowUs();
+	PlaybackEnd end = PlaybackEnd::Played;
+	while(!gone){
+		if(end != PlaybackEnd::Stopped && stopRequested()){
+			cancel(); // the source ends at its next read and Audio stops
+			end = PlaybackEnd::Stopped;
+		}
+		if(msSince(tStart) >= budgetMs){
+			cancel();
+			return end == PlaybackEnd::Stopped ? end : PlaybackEnd::TimedOut;
+		}
+		vTaskDelay(pdMS_TO_TICKS(PlaybackPollMs));
+	}
+	if(end == PlaybackEnd::Played && bufferedBytes > 0){
+		end = PlaybackEnd::Replaced;
+	}
+	return end;
 }
 
 size_t PcmStream::read(uint8_t* buffer, size_t bytes, TickType_t wait){

@@ -3,6 +3,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include "AskOutcome.h"
 #include "TurnAbort.h"
 
@@ -10,34 +11,23 @@ class Audio;
 
 class AudioGenerator;
 
-/** Points in a turn where AskConfig::onPhase is called, for measurements. */
+/** Points in a turn where the AskClient's phase hook is called, for measurements. */
 enum class AskPhase : uint8_t {
 	Connected,  // connected (DNS, TCP, TLS) and request headers sent, before the upload
 	Playing,    // playback just started; normally mid-download
 	Downloaded, // last reply byte read, connection still open
 };
 
-struct AskConfig {
-	uint32_t connectTimeoutMs = 5000;    // DNS + TCP (+ TLS) and each upload write (#7 point 8)
-	uint32_t firstByteTimeoutMs = 12000; // upload done -> response headers (#7 point 8)
-	uint32_t stallTimeoutMs = 12000;     // longest gap between reply bytes once the reply has started
-	size_t prebufferBytes = 16 * 1024;   // PCM buffered before playback starts (0.5 s)
-	size_t minRingBytes = 64 * 1024;     // ring size when the reply length is unknown (2 s)
-	size_t maxRingBytes = 640 * 1024;    // ring size cap: a 20 s reply (#7 point 5) fits without back-pressure
-	size_t maxReplyPcmBytes = 30 * 32000; // PCM played at most (30 s); the server caps replies at ~20 s
-
-	/**
-	 * Optional hook on the ask() task at each AskPhase. Keep it short (no printf to the UART):
-	 * the time it takes counts towards the download phase.
-	 */
-	void (*onPhase)(AskPhase phase, void* ctx) = nullptr;
-	void* phaseCtx = nullptr;
-};
+/**
+ * Optional hook on the ask() task at each AskPhase. Keep it short (no printf to the UART):
+ * the time it takes counts towards the phase it interrupts.
+ */
+using AskPhaseHook = std::function<void(AskPhase phase)>;
 
 /** One /v1/ask turn. Timings are in ms; 0 when the phase was not reached. */
 struct AskResult {
 	AskOutcome outcome = AskOutcome::ThoughtsLost;
-	/** Set when abort() was called or another sound took over playback. Say nothing, whatever the outcome. */
+	/** Set when the turn was aborted or another sound took over playback. Say nothing, whatever the outcome. */
 	bool aborted = false;
 	/** A 200 reply ended early (network error, stall, bad length). Some of it may have played. */
 	bool truncated = false;
@@ -68,7 +58,12 @@ struct AskResult {
  */
 class AskClient {
 public:
-	AskClient(Audio& audio, AudioGenerator& generator, AskConfig config = {});
+	/** DNS + TCP (+ TLS) and each upload write (#7 point 8). */
+	static constexpr uint32_t ConnectTimeoutMs = 5000;
+	/** Upload done -> response headers (#7 point 8). */
+	static constexpr uint32_t FirstByteTimeoutMs = 12000;
+
+	AskClient(Audio& audio, AudioGenerator& generator, AskPhaseHook onPhase = {});
 
 	/**
 	 * Arms a new turn and returns its id. Call it before preparing the turn (waiting for Wi-Fi,
@@ -93,7 +88,7 @@ public:
 
 	/**
 	 * Aborts the armed turn from any task, e.g. on RC entry or a button press. Noticed within
-	 * about 0.5 s once ask() runs, except during connect (up to connectTimeoutMs); playback stops too.
+	 * about 0.5 s once ask() runs, except during connect (up to ConnectTimeoutMs); playback stops too.
 	 * A turn armed afterwards is not affected.
 	 */
 	static void abortInFlight();
@@ -104,12 +99,9 @@ public:
 private:
 	Audio& audio;
 	AudioGenerator& generator;
-	const AskConfig config;
-	inline static TurnAbort turns;
-	uint32_t turn = 0; // the turn ask() is running
+	const AskPhaseHook onPhase;
 
-	bool stopRequested() const;
-	void notify(AskPhase phase) const;
+	inline static TurnAbort turns;
 };
 
 #endif //BUTTERBOT_FIRMWARE_ASKCLIENT_H
