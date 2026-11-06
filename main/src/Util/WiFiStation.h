@@ -50,8 +50,9 @@ public:
 private:
     Hysteresis<static_cast<size_t>(ConnectionStrength::COUNT)> hysteresis;
 	StrongObjectPtr<WiFi> wifi;
-	char SSID[sizeof(RCData::password)];
-	char password[sizeof(RCData::password)];
+	// RCData fields are 16 bytes with no guaranteed terminator; one extra byte keeps these NUL-terminated.
+	char SSID[sizeof(RCData::SSID) + 1] = {};
+	char password[sizeof(RCData::password) + 1] = {};
     State state = State::Disconnected;
     int connectTries = 0;
 

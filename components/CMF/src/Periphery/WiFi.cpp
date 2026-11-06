@@ -120,7 +120,7 @@ void WiFi::setNetworkParameters(const std::string& name, const std::string& pass
 
 #ifdef CONFIG_CMF_WIFI_STA_SUPPORT
 
-void WiFi::startStation() noexcept {
+void WiFi::startStation(bool dhcpClient /*= false*/, wifi_storage_t storage /*= WIFI_STORAGE_FLASH*/) noexcept {
 	if(type != WiFiType::None) {
 		CMF_LOG(WiFi, LogLevel::Warning, "WiFi station attempted to start when WiFi is already running.");
 		return;
@@ -128,15 +128,21 @@ void WiFi::startStation() noexcept {
 
 	type = WiFiType::Station;
 
-	createNetif();
+	createNetif(dhcpClient);
 
 	const wifi_init_config_t cfg_wifi = WIFI_INIT_CONFIG_DEFAULT();
 	esp_wifi_init(&cfg_wifi);
+	// Must precede any esp_wifi_set_config so the chosen storage applies to every configuration.
+	ESP_ERROR_CHECK(esp_wifi_set_storage(storage));
 
 	ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
 	ESP_ERROR_CHECK(esp_wifi_start());
 
 	initSemaphore.acquire();
+}
+
+esp_netif_t* WiFi::getNetif() const noexcept {
+    return netif;
 }
 
 void WiFi::resetIPInfo() const noexcept {
@@ -212,8 +218,15 @@ void WiFi::setTargetParameters(const std::string& ssid, const std::string& passw
 
     wifi_config_t cfg_wifi = {};
 
-    strcpy((char*) cfg_wifi.sta.ssid, ssid.c_str());
-    strcpy((char*) cfg_wifi.sta.password, password.c_str());
+    // Bounded copies: a 32-byte SSID fills the field with no terminator (the driver accepts that); longer values
+    // are rejected rather than overflowing into the next field.
+    if(ssid.size() > sizeof(cfg_wifi.sta.ssid) || password.size() > sizeof(cfg_wifi.sta.password)) {
+        CMF_LOG(WiFi, LogLevel::Error, "WiFi station SSID or password too long, not applied.");
+        return;
+    }
+
+    memcpy(cfg_wifi.sta.ssid, ssid.data(), ssid.size());
+    memcpy(cfg_wifi.sta.password, password.data(), password.size());
 
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &cfg_wifi));
 }
@@ -393,7 +406,7 @@ void WiFi::onNativeEvent(uint32_t id, void *data) noexcept {
     }
 }
 
-void WiFi::createNetif() noexcept {
+void WiFi::createNetif(bool dhcpClient /*= false*/) noexcept {
     if(type != WiFiType::AccessPoint && type != WiFiType::Station) {
         CMF_LOG(WiFi, LogLevel::Warning, "Attempted to create a netif for a WiFi type that is not yet supported.");
         return;
@@ -427,6 +440,22 @@ void WiFi::createNetif() noexcept {
 
         esp_netif_attach_wifi_ap(netif);
         esp_wifi_set_default_wifi_ap_handlers();
+#endif
+	// ReSharper disable once CppDFAConstantConditions
+    }else if(type == WiFiType::Station && dhcpClient) {
+#ifdef CONFIG_CMF_WIFI_STA_SUPPORT
+        // Stock station netif: DHCP client on, IP_EVENT_STA_GOT_IP posted once an address is leased.
+        const esp_netif_config_t cfg = ESP_NETIF_DEFAULT_WIFI_STA();
+
+        netif = esp_netif_new(&cfg);
+        if(netif == nullptr){
+            CMF_LOG(WiFi, LogLevel::Error, "esp_netif_new returned nullptr for WiFi station");
+        }
+        assert(netif);
+        esp_netif_set_default_netif(netif);
+
+        esp_netif_attach_wifi_station(netif);
+        esp_wifi_set_default_wifi_sta_handlers();
 #endif
 	// ReSharper disable once CppDFAConstantConditions
     }else if(type == WiFiType::Station) {
