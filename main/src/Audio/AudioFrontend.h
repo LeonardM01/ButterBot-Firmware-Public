@@ -18,6 +18,7 @@
 #include "esp_mn_iface.h"
 #include "model_path.h"
 #include "Services/LEDControl.h"
+#include "UtteranceRecorder.h"
 #if BB_DEBUG_ASK_BUILD
 #include <optional>
 #include "Debug/AfeGlitchMeter.h"
@@ -100,8 +101,25 @@ public:
 	DECLARE_EVENT(VADEvent, AudioFrontend, bool)
 	VADEvent onVAD = VADEvent(this);
 
+	/**
+	 * Loads AFE + MultiNet (~3.5 MB PSRAM, ~17 KB internal steady). While it loads, plain malloc() goes to PSRAM
+	 * first, so the load's many small allocations don't drain internal RAM (docs/voice-turn-memory.md).
+	 */
 	void loadModel();
 	void unloadModel();
+
+	/**
+	 * Records the next Speech session into `recorder` (the voice turn, #22); nullptr stops recording.
+	 * Only while the mode is Off; setMode(Off) detaches it again.
+	 *
+	 * With a recorder attached, one Speech session reports exactly one onPhrase:
+	 * - a MultiNet command or abort phrase, as without recording;
+	 * - otherwise, once the utterance has ended (silence or the recorder's cap), the fuzzy decision on what
+	 *   MultiNet heard so far, without waiting for its 4 s window (decisions #1);
+	 * - or MultiNet's timeout before any speech: recognized = false with nothing recorded.
+	 * If MultiNet times out while the user is still speaking, recording goes on until the utterance ends.
+	 */
+	void setCapture(UtteranceRecorder* recorder);
 
 #if BB_DEBUG_ASK_BUILD
 	/**
@@ -146,6 +164,18 @@ private:
 	void processSpeech(afe_fetch_result_t* res);
 
 	void processVAD(afe_fetch_result_t* res);
+
+	/** Feeds the attached recorder. True when MultiNet is done and only the recording is still running. */
+	bool recordSpeech(afe_fetch_result_t* res, UtteranceRecorder* recorder);
+
+	/** Reports fuzzyMatch(lastRawTranscript)'s result as MultiNet's timeout does: no match, abort or a phrase. */
+	void reportFuzzy(int fuzzyIndex);
+
+	// Voice turn recording (see setCapture). Set by the state machine task while the AFE tasks are parked
+	// at their gate, then used by the proc task only.
+	std::atomic<UtteranceRecorder*> capture{nullptr};
+	std::atomic<bool> speechReported{false};       // this Speech session's result is out
+	std::atomic<bool> awaitingUtteranceEnd{false}; // MultiNet found nothing, the speaker is still talking
 
 	// Last vad_state observed in Mode::VAD that was broadcast on onVAD.
 	// -1 is a sentinel meaning "nothing fired yet"; used to force the first

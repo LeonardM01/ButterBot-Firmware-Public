@@ -1,4 +1,5 @@
 #include "AudioFrontend.h"
+#include <esp_heap_caps.h>
 #include <esp_timer.h>
 #include <algorithm>
 #include <cstring>
@@ -395,6 +396,8 @@ void AudioFrontend::setMode(Mode mode){
 			}
 
 			lastRawTranscript.clear();
+			speechReported = false;
+			awaitingUtteranceEnd = false;
 			break;
 
 		case Mode::VAD:
@@ -407,6 +410,8 @@ void AudioFrontend::setMode(Mode mode){
 			// their next loop iteration; once both AtGate bits are set, no work is in flight.
 			xEventGroupClearBits(taskGate, RunBit);
 			xEventGroupWaitBits(taskGate, FeedAtGate | ProcAtGate, pdFALSE, pdTRUE, portMAX_DELAY);
+			// The proc task is parked: the recording is final and nothing writes the recorder any more.
+			capture = nullptr;
 			break;
 	}
 
@@ -468,6 +473,15 @@ AudioFrontend::PhraseResult AudioFrontend::waitForPhrase(){
 	return phraseWaitResult;
 }
 
+void AudioFrontend::setCapture(UtteranceRecorder* recorder){
+	if(currentMode != Mode::Off){
+		CMF_LOG(AudioFrontend, LogLevel::Error, "Cannot attach a recorder while the AFE is running!");
+		return;
+	}
+
+	capture = recorder;
+}
+
 void AudioFrontend::setOutputBuffer(RingbufHandle_t rb){
 	if(currentMode == Mode::Audio){
 		CMF_LOG(AudioFrontend, LogLevel::Error, "Cannot set output buffer while audio mode is active!");
@@ -520,6 +534,14 @@ void AudioFrontend::loadModel(){
 
 	uint32_t startTime = millis();
 
+	// On the robot every load drove internal RAM down to 59-319 B free, whatever it started from: with
+	// SPIRAM_MALLOC_ALWAYSINTERNAL=256, esp-sr's small malloc()s fill internal RAM first and fall back to PSRAM
+	// only once it is gone, and the next must-be-internal allocation (a FreeRTOS mutex) then fails and reboots
+	// (#20, docs/voice-turn-memory.md). Send plain malloc() to PSRAM first for the length of the load; explicit
+	// MALLOC_CAP_INTERNAL/DMA requests are unaffected. Other tasks' small mallocs in these ~770 ms land in PSRAM
+	// too, which costs only speed.
+	heap_caps_malloc_extmem_enable(0);
+
 	models = esp_srmodel_init("model"); // partition label defined in partitions.csv
 
 	afe_config = afe_config_init("MM", models, AFE_TYPE_SR, AFE_MODE_HIGH_PERF);
@@ -567,6 +589,8 @@ void AudioFrontend::loadModel(){
 	if(err != nullptr){
 		CMF_LOG(AudioFrontend, Error, "%d phrases with errors", err->num);
 	}
+
+	heap_caps_malloc_extmem_enable(CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL);
 
 	CMF_LOG(AudioFrontend, LogLevel::Debug, "AFE time: %d ms", (int)millis() - (int)startTime);
 
@@ -740,6 +764,12 @@ void AudioFrontend::processAudio(afe_fetch_result_t* res){
 }
 
 void AudioFrontend::processSpeech(afe_fetch_result_t* res){
+	// With a recorder attached the session reports once; the state leaves Speech right after.
+	if(speechReported) return;
+
+	UtteranceRecorder* recorder = capture.load();
+	if(recorder != nullptr && recordSpeech(res, recorder)) return;
+
 	if(res->vad_cache_size > 0 && res->data_size > 0){
 		int16_t* cache = res->vad_cache;
 		int remaining = res->vad_cache_size;
@@ -756,6 +786,11 @@ void AudioFrontend::processSpeech(afe_fetch_result_t* res){
 		esp_mn_results_t* partial = multinet_handle->get_results(multinet_data);
 		if(partial != nullptr && partial->raw_string[0] != '\0' && lastRawTranscript != partial->raw_string){
 			lastRawTranscript = partial->raw_string;
+		}
+		if(recorder != nullptr && recorder->state() == UtteranceRecorder::State::Done){
+			// The utterance ended before MultiNet decided: decide now instead of waiting out its window.
+			reportFuzzy(fuzzyMatch(lastRawTranscript));
+			multinet_handle->clean(multinet_data);
 		}
 		return;
 	}
@@ -784,22 +819,50 @@ void AudioFrontend::processSpeech(afe_fetch_result_t* res){
 		if(lastRawTranscript.empty()){
 			lastRawTranscript = mn_result->raw_string;
 		}
-		CMF_LOG(AudioFrontend, LogLevel::Info, "timeout, broadcasting transcript: '%s', len: %d", lastRawTranscript.c_str(), (int)lastRawTranscript.length());
+		// Length only: the transcript is the user's speech (S0.5).
+		CMF_LOG(AudioFrontend, LogLevel::Info, "timeout, transcript length %d", (int)lastRawTranscript.length());
 
 		const int fuzzyIndex = fuzzyMatch(lastRawTranscript);
-		if(fuzzyIndex < 0){
-			reportPhrase(false, -1, lastRawTranscript, 0.0f);
-		}else if(fuzzyIndex < AbortPhrasesNum){
-			reportPhrase(true, -1, lastRawTranscript, 0.0f);
+		if(fuzzyIndex < 0 && recorder != nullptr && recorder->state() == UtteranceRecorder::State::Speaking){
+			// No command, and the user is still talking: it's a question, let the recording finish (decisions #1).
+			awaitingUtteranceEnd = true;
 		}else{
-			reportPhrase(true, fuzzyIndex - AbortPhrasesNum, lastRawTranscript, 0.0f);
+			reportFuzzy(fuzzyIndex);
 		}
 
 		multinet_handle->clean(multinet_data);
 	}
 }
 
+bool AudioFrontend::recordSpeech(afe_fetch_result_t* res, UtteranceRecorder* recorder){
+	const size_t cacheBytes = res->vad_cache != nullptr && res->vad_cache_size > 0 ? (size_t) res->vad_cache_size : 0;
+	const size_t dataBytes = res->data != nullptr && res->data_size > 0 ? (size_t) res->data_size : 0;
+	recorder->onFetch(res->vad_state == VAD_SPEECH,
+					  { reinterpret_cast<const uint8_t*>(res->vad_cache), cacheBytes },
+					  { reinterpret_cast<const uint8_t*>(res->data), dataBytes });
+
+	if(!awaitingUtteranceEnd) return false;
+
+	if(recorder->state() == UtteranceRecorder::State::Done){
+		reportPhrase(false, -1, lastRawTranscript, 0.0f);
+	}
+	return true;
+}
+
+void AudioFrontend::reportFuzzy(int fuzzyIndex){
+	if(fuzzyIndex < 0){
+		reportPhrase(false, -1, lastRawTranscript, 0.0f);
+	}else if(fuzzyIndex < AbortPhrasesNum){
+		reportPhrase(true, -1, lastRawTranscript, 0.0f);
+	}else{
+		reportPhrase(true, fuzzyIndex - AbortPhrasesNum, lastRawTranscript, 0.0f);
+	}
+}
+
 void AudioFrontend::reportPhrase(bool recognized, int index, const std::string& transcript, float confidence){
+	if(capture.load() != nullptr){
+		speechReported = true;
+	}
 	onPhrase.broadcast(recognized, index, transcript, confidence);
 	if(phraseWaiting.load()){
 		phraseWaitResult = { recognized, index, transcript, confidence };
