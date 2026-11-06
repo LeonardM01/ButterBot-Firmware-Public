@@ -18,6 +18,8 @@ void runTurnAbortTests();
 
 void runAskLinesTests();
 
+void runWavHeaderTests();
+
 extern "C" void app_main(void){
 	UNITY_BEGIN();
 	runAskOutcomeTests();
@@ -26,6 +28,7 @@ extern "C" void app_main(void){
 	runSampleAlignerTests();
 	runTurnAbortTests();
 	runAskLinesTests();
+	runWavHeaderTests();
 	const int failures = UNITY_END();
 	// The FreeRTOS POSIX port keeps the scheduler alive, so leave explicitly with Unity's verdict.
 	// _exit skips atexit handlers, which can deadlock against the port's threads.
