@@ -416,9 +416,14 @@ void IdleState::onButtonEvent(int button, ISRButtonInput::Action action){
 #if BB_DEBUG_ASK_BUILD
 	// Measurement build: a 1.0-2.5 s hold runs the debug ask turn (docs/measurement-build.md).
 	if(classifyPowerPress(millis() - lastBtnPressTime) == PowerPress::Medium){
-		if(canStartInstantRoutine()){
-			sm->transitionTo<DebugAskState>();
+		// Like the short-press listen below: leaving Idle ends any idle routine, so only a pending
+		// transition blocks it. Gating on canStartInstantRoutine() silently dropped presses whenever
+		// a ramble or observe routine happened to be running.
+		if(sm->isTransitionPending()){
+			CMF_LOG(IdleState, LogLevel::Warning, "Debug ask press ignored: a state transition is pending");
+			return;
 		}
+		sm->transitionTo<DebugAskState>();
 		return;
 	}
 #endif
