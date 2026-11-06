@@ -42,3 +42,11 @@ void formatAskMeasure(char* out, size_t cap, const AskResult& r){
 			 r.downloadBytes, r.downloadMs, down, r.firstAudioMs,
 			 r.underruns, r.starvedMs, r.pcmBytesPlayed);
 }
+
+void formatAfeMeasure(char* out, size_t cap, const AfeGlitchMeter::Stats& stats){
+	snprintf(out, cap,
+			 "BBMEASURE afe mic_overflows=%" PRIu32 " mic_lost_ms=%" PRIu32 " mic_read_errors=%" PRIu32 " "
+			 "afe_backlog_max_ms=%" PRIu32 " afe_overflows=%" PRIu32 " fetch_errors=%" PRIu32,
+			 stats.micOverflows, stats.micLostMs, stats.micReadErrors,
+			 stats.afeBacklogMaxMs, stats.afeOverflows, stats.fetchErrors);
+}

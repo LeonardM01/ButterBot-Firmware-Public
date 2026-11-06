@@ -1,4 +1,5 @@
 #include "AudioFrontend.h"
+#include <esp_timer.h>
 #include <algorithm>
 #include <cstring>
 #include <limits>
@@ -615,6 +616,30 @@ void AudioFrontend::unloadModel(){
 	CMF_LOG(AudioFrontend, LogLevel::Debug, "unload time: %d ms", (int)millis() - (int)startTime);
 }
 
+#if BB_DEBUG_ASK_BUILD
+void AudioFrontend::resetGlitchMeter(){
+	if(!afe_handle || currentMode != Mode::Off){
+		CMF_LOG(AudioFrontend, LogLevel::Warning, "Glitch meter needs the model loaded and the mode Off");
+		return;
+	}
+
+	// The mic's I2S channel (CMF I2S) uses the driver's default DMA setup. When the feed task is late the
+	// driver keeps filling these buffers and then drops the oldest.
+	const i2s_chan_config_t rx = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
+	const auto chunk = (uint32_t) afe_handle->get_feed_chunksize(afe_data);
+	glitchMeter.emplace(AfeGlitchMeter::Config{
+		.sampleRate = (uint32_t) afe_handle->get_samp_rate(afe_data),
+		.framesPerRead = chunk,
+		.micQueueFrames = (uint32_t) (rx.dma_desc_num * rx.dma_frame_num),
+		.afeRingFrames = (uint32_t) afe_config->afe_ringbuf_size * chunk, // ring size is in feed chunks
+	});
+}
+
+AfeGlitchMeter::Stats AudioFrontend::glitchStats() const{
+	return glitchMeter ? glitchMeter->stats() : AfeGlitchMeter::Stats{};
+}
+#endif
+
 void AudioFrontend::feedTaskFunc(){
 	waitAtGate(FeedAtGate);
 
@@ -626,9 +651,15 @@ void AudioFrontend::feedTaskFunc(){
 	auto ret = ServiceLocator::MicInputInstance->getStereo({ feedBuffer });
 
 	if(ret != feedBuffer.size()){
+#if BB_DEBUG_ASK_BUILD
+		if(glitchMeter) glitchMeter->onMicReadError();
+#endif
 		CMF_LOG(AudioFrontend, LogLevel::Error, "Error reading from microphone");
 		return;
 	}
+#if BB_DEBUG_ASK_BUILD
+	if(glitchMeter) glitchMeter->onMicRead(esp_timer_get_time());
+#endif
 
 	afe_handle->feed(afe_data, feedBuffer.data());
 }
@@ -644,9 +675,15 @@ void AudioFrontend::procTaskFunc(){
 	afe_fetch_result_t* res = afe_handle->fetch(afe_data);
 
 	if(!res || res->ret_value == ESP_FAIL){
+#if BB_DEBUG_ASK_BUILD
+		if(glitchMeter) glitchMeter->onFetchError();
+#endif
 		CMF_LOG(AudioFrontend, LogLevel::Error, "AFE fetch error");
 		return;
 	}
+#if BB_DEBUG_ASK_BUILD
+	if(glitchMeter) glitchMeter->onFetch((uint32_t) res->data_size / sizeof(int16_t));
+#endif
 
 	switch(currentMode){
 		case Mode::Audio:

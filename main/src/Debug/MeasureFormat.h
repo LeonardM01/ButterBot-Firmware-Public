@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include "Net/AskClient.h"
+#include "AfeGlitchMeter.h"
 
 /**
  * Text for the measurement build's serial lines. Every line starts with "BBMEASURE" and is
@@ -18,5 +19,8 @@ void formatKiBps(char* out, size_t cap, uint32_t bytes, uint32_t ms);
 
 /** Writes the per-turn summary from AskResult. Always NUL-terminated; cut if `cap` is too small. */
 void formatAskMeasure(char* out, size_t cap, const AskResult& r);
+
+/** Writes the turn's audio-input glitch counters. Always NUL-terminated; cut if `cap` is too small. */
+void formatAfeMeasure(char* out, size_t cap, const AfeGlitchMeter::Stats& stats);
 
 #endif //BUTTERBOT_FIRMWARE_MEASUREFORMAT_H

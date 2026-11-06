@@ -205,6 +205,7 @@ private:
 
 		const int64_t tLoad = nowUs();
 		afe.loadModel(); // AFE + MultiNet, as ListenState does
+		afe.resetGlitchMeter();
 		afe.setMode(AudioFrontend::Mode::VAD);
 		const uint32_t loadMs = msSince(tLoad);
 
@@ -218,6 +219,7 @@ private:
 
 			if(wavLen > 0 && !stopRequested()){
 				const AskResult r = askClient->ask(turn, capture, wavLen);
+				const AfeGlitchMeter::Stats glitches = afe.glitchStats();
 				printNow("after_turn", true);
 				printHeap("connected", connected, true);
 				printHeap("playing", playing, true);
@@ -225,6 +227,8 @@ private:
 
 				char line[MeasureLineBytes];
 				formatAskMeasure(line, sizeof(line), r);
+				printf("%s\n", line);
+				formatAfeMeasure(line, sizeof(line), glitches);
 				printf("%s\n", line);
 			}
 		}
