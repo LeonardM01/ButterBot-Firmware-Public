@@ -11,7 +11,7 @@
  * No ESP-IDF dependencies: host-tested in test/host/measure_logic.
  */
 
-inline constexpr size_t MeasureLineBytes = 320; // fits the longest ask line
+inline constexpr size_t MeasureLineBytes = 400; // fits the longest ask line, every number at its widest
 
 /** Writes bytes/ms as KiB/s (1 KiB = 1024 B) with one decimal, or "-" when ms is 0. */
 void formatKiBps(char* out, size_t cap, uint32_t bytes, uint32_t ms);

@@ -33,11 +33,11 @@ void formatAskMeasure(char* out, size_t cap, const AskResult& r){
 	formatKiBps(down, sizeof(down), r.downloadBytes, r.downloadMs);
 
 	snprintf(out, cap,
-			 "BBMEASURE ask outcome=%s status=%d aborted=%d truncated=%d connect_ms=%" PRIu32 " "
+			 "BBMEASURE ask outcome=%s status=%d aborted=%d truncated=%d dns_ms=%" PRIu32 " connect_ms=%" PRIu32 " "
 			 "up_bytes=%" PRIu32 " up_ms=%" PRIu32 " up_KiB_s=%s first_byte_ms=%" PRIu32 " "
 			 "down_bytes=%" PRIu32 " down_ms=%" PRIu32 " down_KiB_s=%s first_audio_ms=%" PRIu32 " "
 			 "underruns=%" PRIu32 " starved_ms=%" PRIu32 " played_bytes=%" PRIu32,
-			 outcomeName(r.outcome), r.status, r.aborted ? 1 : 0, r.truncated ? 1 : 0, r.connectMs,
+			 outcomeName(r.outcome), r.status, r.aborted ? 1 : 0, r.truncated ? 1 : 0, r.dnsMs, r.connectMs,
 			 r.uploadBytes, r.uploadMs, up, r.firstByteMs,
 			 r.downloadBytes, r.downloadMs, down, r.firstAudioMs,
 			 r.underruns, r.starvedMs, r.pcmBytesPlayed);

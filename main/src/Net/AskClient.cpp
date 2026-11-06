@@ -1,7 +1,9 @@
 #include "AskClient.h"
 #include <algorithm>
+#include <array>
 #include <memory>
 #include <optional>
+#include <lwip/netdb.h>
 #include <esp_crt_bundle.h>
 #include <esp_heap_caps.h>
 #include <esp_http_client.h>
@@ -29,6 +31,15 @@ static_assert(Policy != UrlPolicy::Rejected,
 			  "without a trailing slash, query, fragment or credentials");
 
 constexpr char AskUrl[] = BB_API_URL "/v1/ask";
+
+constexpr std::string_view ApiHost = apiHost(BB_API_URL);
+static_assert(!ApiHost.empty(), "BB_API_URL has no host");
+// NUL-terminated for getaddrinfo.
+constexpr auto ApiHostZ = [](){
+	std::array<char, ApiHost.size() + 1> host{};
+	ApiHost.copy(host.data(), ApiHost.size());
+	return host;
+}();
 constexpr char AuthorizationValue[] = "Bearer " BB_DEVICE_TOKEN; // never log
 
 constexpr int HttpRxBufferBytes = 2048;
@@ -80,13 +91,13 @@ public:
 		}
 
 		tStart = nowUs();
-		if(!connect(len) || !upload(wav, len) || !awaitStatus()){
+		if(!resolve() || !connect(len) || !upload(wav, len) || !awaitStatus()){
 			return result;
 		}
 		if(result.outcome != AskOutcome::Play){
 			// No body is read for anything but 200, and none is ever logged (#7 point 7).
-			CMF_LOG(AskClient, LogLevel::Info, "ask: HTTP %d, connect %u ms, up %u B in %u ms, first byte %u ms",
-					result.status, (unsigned) result.connectMs, (unsigned) result.uploadBytes, (unsigned) result.uploadMs,
+			CMF_LOG(AskClient, LogLevel::Info, "ask: HTTP %d, dns %u ms, connect %u ms, up %u B in %u ms, first byte %u ms",
+					result.status, (unsigned) result.dnsMs, (unsigned) result.connectMs, (unsigned) result.uploadBytes, (unsigned) result.uploadMs,
 					(unsigned) result.firstByteMs);
 			return result;
 		}
@@ -139,12 +150,39 @@ private:
 		return http.get();
 	}
 
-	/** DNS, TCP, TLS and the request headers. */
+	/**
+	 * Resolves the API host on its own, so DNS time is measured apart from connect time and counts
+	 * against the connect deadline. esp_http_client's own lookup then hits lwIP's DNS cache.
+	 */
+	bool resolve(){
+		addrinfo hints = {};
+		hints.ai_family = AF_UNSPEC; // as esp-tls asks
+		hints.ai_socktype = SOCK_STREAM;
+		addrinfo* found = nullptr;
+		const int err = getaddrinfo(ApiHostZ.data(), nullptr, &hints, &found);
+		result.dnsMs = msSince(tStart);
+		if(found != nullptr){
+			freeaddrinfo(found);
+		}
+		if(err != 0 || found == nullptr){
+			CMF_LOG(AskClient, LogLevel::Warning, "ask: DNS lookup failed (%d) after %u ms", err, (unsigned) result.dnsMs);
+			return false;
+		}
+		if(result.dnsMs >= AskClient::ConnectTimeoutMs){
+			CMF_LOG(AskClient, LogLevel::Warning, "ask: DNS took %u ms, past the %u ms connect deadline",
+					(unsigned) result.dnsMs, (unsigned) AskClient::ConnectTimeoutMs);
+			return false;
+		}
+		return true;
+	}
+
+	/** TCP, TLS and the request headers, within what is left of the connect deadline. */
 	bool connect(size_t len){
+		const int64_t tResolved = nowUs();
 		esp_http_client_config_t cfg = {};
 		cfg.url = AskUrl;
 		cfg.method = HTTP_METHOD_POST;
-		cfg.timeout_ms = (int) AskClient::ConnectTimeoutMs;
+		cfg.timeout_ms = (int) (AskClient::ConnectTimeoutMs - result.dnsMs);
 		cfg.buffer_size = HttpRxBufferBytes;
 		cfg.buffer_size_tx = HttpTxBufferBytes;
 		cfg.disable_auto_redirect = true; // never follow a redirect off the configured host
@@ -164,10 +202,18 @@ private:
 		esp_http_client_set_header(client(), "Authorization", AuthorizationValue);
 
 		if(esp_http_client_open(client(), (int) len) != ESP_OK){
-			CMF_LOG(AskClient, LogLevel::Warning, "ask: connect failed");
+			CMF_LOG(AskClient, LogLevel::Warning, "ask: connect failed after %u ms", (unsigned) msSince(tResolved));
 			return false;
 		}
-		result.connectMs = msSince(tStart);
+		result.connectMs = msSince(tResolved);
+		// The handshake can overrun the budget it was given (see AskClient::ConnectTimeoutMs): hold the line here.
+		if(const uint32_t total = msSince(tStart); total > AskClient::ConnectTimeoutMs){
+			CMF_LOG(AskClient, LogLevel::Warning, "ask: connected after %u ms, past the %u ms deadline",
+					(unsigned) total, (unsigned) AskClient::ConnectTimeoutMs);
+			return false;
+		}
+		// From here the timeout bounds each upload write.
+		esp_http_client_set_timeout_ms(client(), (int) AskClient::ConnectTimeoutMs);
 		notify(AskPhase::Connected);
 		return true;
 	}
@@ -417,9 +463,9 @@ private:
 
 	void logSummary() const{
 		CMF_LOG(AskClient, LogLevel::Info,
-				"ask: HTTP %d, connect %u ms, up %u B in %u ms, first byte %u ms, down %u B in %u ms, "
+				"ask: HTTP %d, dns %u ms, connect %u ms, up %u B in %u ms, first byte %u ms, down %u B in %u ms, "
 				"first audio %u ms, underruns %u (%u ms)%s%s",
-				result.status, (unsigned) result.connectMs, (unsigned) result.uploadBytes, (unsigned) result.uploadMs,
+				result.status, (unsigned) result.dnsMs, (unsigned) result.connectMs, (unsigned) result.uploadBytes, (unsigned) result.uploadMs,
 				(unsigned) result.firstByteMs, (unsigned) result.downloadBytes, (unsigned) result.downloadMs,
 				(unsigned) result.firstAudioMs, (unsigned) result.underruns, (unsigned) result.starvedMs,
 				result.truncated ? ", truncated" : "", result.aborted ? ", aborted" : "");

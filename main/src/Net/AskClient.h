@@ -13,7 +13,7 @@ class AudioGenerator;
 
 /** Points in a turn where the AskClient's phase hook is called, for measurements. */
 enum class AskPhase : uint8_t {
-	Connected,  // connected (DNS, TCP, TLS) and request headers sent, before the upload
+	Connected,  // connected (TCP, TLS) and request headers sent, before the upload
 	Playing,    // playback just started; normally mid-download
 	Downloaded, // last reply byte read, connection still open
 };
@@ -33,7 +33,8 @@ struct AskResult {
 	bool truncated = false;
 	int status = -1;            // HTTP status, -1 if none arrived
 
-	uint32_t connectMs = 0;     // ask start -> connected and request headers sent
+	uint32_t dnsMs = 0;         // ask start -> API host resolved
+	uint32_t connectMs = 0;     // host resolved -> connected (TCP, plus the TLS handshake on https) and headers sent
 	uint32_t uploadBytes = 0;
 	uint32_t uploadMs = 0;      // connected -> last body byte written
 	uint32_t firstByteMs = 0;   // upload done -> response headers received
@@ -58,7 +59,15 @@ struct AskResult {
  */
 class AskClient {
 public:
-	/** DNS + TCP (+ TLS) and each upload write (#7 point 8). */
+	/**
+	 * Deadline for DNS + TCP (+ TLS) from the start of ask() (#7 point 8), and the timeout of each upload write.
+	 *
+	 * A connect that finishes after the deadline ends the turn as thoughts-lost. esp_http_client can't be
+	 * interrupted mid-connect, though, so ask() can block past it: lwIP's resolver has no timeout parameter
+	 * (about 7 s per DNS server when they don't answer), the TCP connect waits at most the budget left after
+	 * DNS, and the TLS handshake checks that budget between handshake steps, each of which can wait as long
+	 * again. Worst case is roughly DNS plus twice the budget left; aborts are noticed only after that.
+	 */
 	static constexpr uint32_t ConnectTimeoutMs = 5000;
 	/** Upload done -> response headers (#7 point 8). */
 	static constexpr uint32_t FirstByteTimeoutMs = 12000;
@@ -88,7 +97,7 @@ public:
 
 	/**
 	 * Aborts the armed turn from any task, e.g. on RC entry or a button press. Noticed within
-	 * about 0.5 s once ask() runs, except during connect (up to ConnectTimeoutMs); playback stops too.
+	 * about 0.5 s once ask() runs, except during DNS and connect (see ConnectTimeoutMs); playback stops too.
 	 * A turn armed afterwards is not affected.
 	 */
 	static void abortInFlight();

@@ -31,6 +31,7 @@ static void test_the_ask_line_carries_every_measurement(){
 	AskResult r;
 	r.outcome = AskOutcome::Play;
 	r.status = 200;
+	r.dnsMs = 12;
 	r.connectMs = 35;
 	r.uploadBytes = 68480;
 	r.uploadMs = 120;
@@ -44,7 +45,7 @@ static void test_the_ask_line_carries_every_measurement(){
 
 	char buf[MeasureLineBytes];
 	formatAskMeasure(buf, sizeof(buf), r);
-	TEST_ASSERT_EQUAL_STRING("BBMEASURE ask outcome=play status=200 aborted=0 truncated=0 connect_ms=35 "
+	TEST_ASSERT_EQUAL_STRING("BBMEASURE ask outcome=play status=200 aborted=0 truncated=0 dns_ms=12 connect_ms=35 "
 							 "up_bytes=68480 up_ms=120 up_KiB_s=557.3 first_byte_ms=1850 "
 							 "down_bytes=160044 down_ms=400 down_KiB_s=390.7 first_audio_ms=1900 "
 							 "underruns=2 starved_ms=64 played_bytes=160000", buf);
@@ -57,7 +58,7 @@ static void test_a_failed_turn_names_its_outcome_and_flags(){
 
 	char buf[MeasureLineBytes];
 	formatAskMeasure(buf, sizeof(buf), r);
-	TEST_ASSERT_EQUAL_STRING("BBMEASURE ask outcome=lost status=-1 aborted=1 truncated=1 connect_ms=0 "
+	TEST_ASSERT_EQUAL_STRING("BBMEASURE ask outcome=lost status=-1 aborted=1 truncated=1 dns_ms=0 connect_ms=0 "
 							 "up_bytes=0 up_ms=0 up_KiB_s=- first_byte_ms=0 "
 							 "down_bytes=0 down_ms=0 down_KiB_s=- first_audio_ms=0 "
 							 "underruns=0 starved_ms=0 played_bytes=0", buf);
