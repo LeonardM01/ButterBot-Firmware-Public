@@ -58,6 +58,7 @@
 #include "Services/ObjDet.h"
 #include <Phrases.h>
 #include "Audio/SpeechAudioSource.h"
+#include "Net/AskClient.h"
 #include "Util/EfuseMeta.h"
 #include "JigHWTest/JigHWTest.h"
 #include "Services/GasConfigureService.h"
@@ -93,6 +94,8 @@ protected:
 		esp_log_level_set("AudioFrontend", ESP_LOG_NONE);
 		esp_log_level_set("FaceDet", ESP_LOG_NONE);
 		esp_log_level_set("Time", ESP_LOG_NONE);
+
+		AskClient::logSecurityPosture();
 
 
 		esp_err_t ret = nvs_flash_init();
