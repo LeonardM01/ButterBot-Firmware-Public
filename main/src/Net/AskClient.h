@@ -63,7 +63,8 @@ public:
 	static bool aborted(uint32_t turn);
 
 	/**
-	 * Runs one turn and returns once playback has finished, failed or was aborted.
+	 * Runs one turn and returns once playback has finished, failed or was aborted. The reply is queued
+	 * behind whatever Audio is playing (a filler line), not cut in.
 	 *
 	 * Blocking: run it on a worker task, not the state machine. The task needs about
 	 * 8 KB of stack for esp_http_client and the TLS handshake; core 0 keeps it off
