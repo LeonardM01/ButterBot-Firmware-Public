@@ -59,6 +59,8 @@
 #include <Phrases.h>
 #include "Audio/SpeechAudioSource.h"
 #include "Net/AskClient.h"
+#include "Net/AskWorker.h"
+#include "Audio/VoiceCapture.h"
 #include "Util/EfuseMeta.h"
 #include "JigHWTest/JigHWTest.h"
 #include "Services/GasConfigureService.h"
@@ -95,8 +97,13 @@ protected:
 		esp_log_level_set("FaceDet", ESP_LOG_NONE);
 		esp_log_level_set("Time", ESP_LOG_NONE);
 
-		// One Info summary line per /v1/ask turn.
+		// One Info summary line per /v1/ask turn, and the voice turn's heap lines (sizes only, docs/voice-turn-memory.md).
 		esp_log_level_set("AskClient", ESP_LOG_INFO);
+		esp_log_level_set("AskWorker", ESP_LOG_INFO);
+		esp_log_level_set("VoiceTurn", ESP_LOG_INFO);
+		// One line per voice turn outcome (sizes and outcomes only, never the transcript).
+		esp_log_level_set("ListenState", ESP_LOG_INFO);
+		esp_log_level_set("AskState", ESP_LOG_INFO);
 		// esp_http_client warns on every expired poll while the ask client waits for the reply.
 		esp_log_level_set("HTTP_CLIENT", ESP_LOG_ERROR);
 
@@ -327,6 +334,15 @@ protected:
 
 		// Joins home Wi-Fi in the background; RC mode borrows the same radio.
 		ServiceLocator::WiFiServiceInstance = new WiFiService();
+
+		// Voice turn (#22): allocated once here, before any turn can fragment internal RAM, and reused (M8).
+		// Both live in PSRAM: the 320,044 B capture buffer and the ask worker's stack and TCB.
+		// Both are kept for the whole runtime and never freed (see ServiceLocator).
+		ServiceLocator::VoiceCaptureInstance = VoiceCapture::create().release();
+		if(!ServiceLocator::VoiceCaptureInstance){
+			CMF_LOG(Butterbot, LogLevel::Error, "No PSRAM for the voice capture buffer: questions can't be asked");
+		}
+		ServiceLocator::AskWorkerInstance = new AskWorker(*audio, ServiceLocator::WiFiServiceInstance);
 
 		EventBag* eventBag = registerService<EventBag>();
 

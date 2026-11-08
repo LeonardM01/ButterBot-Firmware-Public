@@ -84,6 +84,13 @@ static void test_the_afe_line_carries_every_glitch_counter(){
 							 "afe_backlog_max_ms=96 afe_overflows=3 fetch_errors=4", buf);
 }
 
+static void test_the_stack_line_names_the_task_and_its_high_water_mark(){
+	char buf[MeasureLineBytes];
+	// The ask worker over http on the robot: 9,532 B of 12,288 never touched.
+	formatStackMeasure(buf, sizeof(buf), "AskWorker", 12288, 9532);
+	TEST_ASSERT_EQUAL_STRING("BBMEASURE stack task=AskWorker size=12288 min_free=9532", buf);
+}
+
 void runMeasureFormatTests(){
 	RUN_TEST(test_throughput_is_kib_per_second_with_one_decimal);
 	RUN_TEST(test_throughput_without_a_duration_is_a_dash);
@@ -92,4 +99,5 @@ void runMeasureFormatTests(){
 	RUN_TEST(test_a_failed_turn_names_its_outcome_and_flags);
 	RUN_TEST(test_a_short_buffer_is_cut_and_terminated);
 	RUN_TEST(test_the_afe_line_carries_every_glitch_counter);
+	RUN_TEST(test_the_stack_line_names_the_task_and_its_high_water_mark);
 }

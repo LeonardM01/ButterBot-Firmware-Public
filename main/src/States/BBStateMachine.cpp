@@ -94,7 +94,7 @@ void BBStateMachine::unbindRoutineEvents(){
 }
 
 TickType_t BBStateMachine::getEventScanningTime() const noexcept{
-	if(next != nullptr){
+	if(next.pending()){
 		return 0;
 	}
 
@@ -116,10 +116,11 @@ TickType_t BBStateMachine::getEventScanningTime() const noexcept{
 }
 
 void BBStateMachine::tick(float deltaTime) noexcept{
-	if(next != nullptr){
+	// take() empties the slot before the new state's constructor runs, so a transition that constructor
+	// requests (ListenState refusing the model load) is kept for the next tick instead of being wiped.
+	if(const StateFactory factory = next.take()){
 		destroyState();
-		currentState = next(stateBuf, this);
-		next = nullptr;
+		currentState = factory(stateBuf, this);
 	}
 
 	if(currentState != nullptr){

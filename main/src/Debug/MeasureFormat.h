@@ -23,4 +23,7 @@ void formatAskMeasure(char* out, size_t cap, const AskResult& r);
 /** Writes the turn's audio-input glitch counters. Always NUL-terminated; cut if `cap` is too small. */
 void formatAfeMeasure(char* out, size_t cap, const AfeGlitchMeter::Stats& stats);
 
+/** Writes a task's stack size and high-water mark (M1). Always NUL-terminated; cut if `cap` is too small. */
+void formatStackMeasure(char* out, size_t cap, const char* task, uint32_t sizeBytes, uint32_t minFreeBytes);
+
 #endif //BUTTERBOT_FIRMWARE_MEASUREFORMAT_H

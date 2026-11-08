@@ -2,9 +2,7 @@
 
 #if BB_DEBUG_ASK_BUILD
 
-#include <atomic>
 #include <cstdio>
-#include <optional>
 #include <esp_heap_caps.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -12,9 +10,11 @@
 #include <Log/Log.h>
 #include <Services/Audio/Audio.h>
 #include "Audio/AudioFrontend.h"
-#include "Audio/PcmPassthroughGen.h"
 #include "Net/AskClient.h"
+#include "Net/AskWorker.h"
+#include "Audio/VoiceCapture.h"
 #include "Util/Elapsed.h"
+#include "Util/HeapSnapshot.h"
 #include "Util/ServiceLocator.h"
 #include "MeasureFormat.h"
 
@@ -23,33 +23,22 @@ DEFINE_LOG(DebugAsk)
 namespace {
 
 constexpr char QuestionPath[] = "/spiffs/debug/question.wav"; // staged into SPIFFS by main/CMakeLists.txt
-constexpr size_t CaptureBytes = 320044;  // 10 s of 16 kHz mono s16 plus a WAV header (#3)
 constexpr uint32_t OnlineTimeoutMs = 20000;
-constexpr uint32_t OnlinePollMs = 250;   // bounds abort latency while waiting for Wi-Fi
-constexpr uint32_t IdlePollMs = 10;
 
-// esp_http_client (and TLS on an https build) needs ~8 KB. Internal RAM, because the task reads SPIFFS.
-constexpr uint32_t StackBytes = 8192;
-constexpr UBaseType_t Priority = 5;      // below BBStateMachine (10), Audio (12) and lwIP (18)
-constexpr BaseType_t Core = 0;           // off core 1, where Audio and the AFE run
-
-struct HeapSnapshot {
-	bool taken = false;
-	size_t intFree, intMin, intLargest;
-	size_t psFree, psMin, psLargest;
+enum class Step : uint8_t {
+	Idle,
+	WaitOnline,
+	Asking,
 };
 
-HeapSnapshot snapshot(){
-	HeapSnapshot s;
-	s.taken = true;
-	s.intFree = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
-	s.intMin = heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL);
-	s.intLargest = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
-	s.psFree = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
-	s.psMin = heap_caps_get_minimum_free_size(MALLOC_CAP_SPIRAM);
-	s.psLargest = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM);
-	return s;
-}
+// State machine task only (C7), except `turn`, which abort() never touches (it aborts whatever is armed).
+struct Turn {
+	Step step = Step::Idle;
+	uint32_t id = 0;
+	int64_t tStart = 0;
+	bool monitoring = false;
+	AfeGlitchMeter::Stats glitches{};
+} turn;
 
 /**
  * `min_since=turn` while heap_caps_monitor_local_minimum_free_size is running (the low point since
@@ -67,208 +56,181 @@ void printHeap(const char* at, const HeapSnapshot& s, bool turnMinimum){
 }
 
 void printNow(const char* at, bool turnMinimum){
-	printHeap(at, snapshot(), turnMinimum);
+	printHeap(at, takeHeapSnapshot(), turnMinimum);
 }
 
-class Worker {
-public:
-	bool start(){
-		if(busy.exchange(true)) return false;
-		// Armed here, before the worker waits for Wi-Fi or loads models, so an abort from now on is never lost.
-		turn = AskClient::beginTurn();
+bool stopRequested(){
+	return AskClient::aborted(turn.id);
+}
 
-		if(task == nullptr && xTaskCreatePinnedToCoreWithCaps(&Worker::taskMain, "DebugAsk", StackBytes, this, Priority, &task,
-															  Core, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT) != pdPASS){
-			task = nullptr;
-			busy = false;
-			CMF_LOG(DebugAsk, LogLevel::Warning, "no internal RAM for the worker task");
-			return false;
-		}
-		xTaskNotifyGive(task);
-		return true;
+/** Reads the canned question into `buf`. Returns its length, 0 on failure. SPIFFS: internal-stack task only (M3). */
+size_t loadQuestion(uint8_t* buf, size_t cap){
+	FILE* f = fopen(QuestionPath, "rb");
+	if(f == nullptr){
+		printf("BBMEASURE turn error=no_question_file path=%s\n", QuestionPath);
+		return 0;
+	}
+	const size_t n = fread(buf, 1, cap, f);
+	const bool tooBig = fgetc(f) != EOF;
+	fclose(f);
+	if(n == 0 || tooBig){
+		printf("BBMEASURE turn error=question_unreadable_or_over_%u_B\n", (unsigned) cap);
+		return 0;
+	}
+	return n;
+}
+
+void finish(){
+	if(const AskWorker* worker = ServiceLocator::AskWorkerInstance){
+		char line[MeasureLineBytes];
+		formatStackMeasure(line, sizeof(line), "AskWorker", AskWorker::StackBytes, worker->stackMinFree());
+		printf("%s\n", line);
+	}
+	if(turn.monitoring){
+		heap_caps_monitor_local_minimum_free_size_stop();
+		turn.monitoring = false;
+	}
+	printNow("cleanup", false);
+	printf("BBMEASURE turn end total_ms=%u\n", (unsigned) msSince(turn.tStart));
+	turn.step = Step::Idle;
+}
+
+/**
+ * Steps 2-4, blocking the state machine for about a second like a ListenState model load does.
+ * Ends the turn itself unless the worker took the question.
+ */
+void prepareAndSubmit(){
+	AudioFrontend* afe = Application::getApp()->getService<AudioFrontend>();
+	VoiceCapture* capture = ServiceLocator::VoiceCaptureInstance;
+	AskWorker* worker = ServiceLocator::AskWorkerInstance;
+	if(afe == nullptr || capture == nullptr || worker == nullptr){
+		printf("BBMEASURE turn error=missing_service\n");
+		finish();
+		return;
+	}
+	if(worker->busy()){
+		// It still reads the capture buffer (C7). Only this task submits, so it stays idle once seen idle here.
+		printf("BBMEASURE turn error=worker_busy\n");
+		finish();
+		return;
 	}
 
-	bool running() const{ return busy; }
-
-	void abort(){
-		AskClient::abortInFlight();
+	const int64_t tLoad = nowUs();
+	if(!afe->loadModel()){ // AFE + MultiNet, as ListenState does
+		printf("BBMEASURE turn error=model_load_failed\n");
+		finish();
+		return;
 	}
+	afe->resetGlitchMeter();
+	afe->setMode(AudioFrontend::Mode::VAD);
+	const uint32_t loadMs = msSince(tLoad);
 
-private:
-	TaskHandle_t task = nullptr;
-	std::atomic<bool> busy{false};
-	uint32_t turn = 0; // written by start() before the worker is notified
+	// The boot-time capture buffer, as a voice turn uses it: no per-turn allocation.
+	const std::span<uint8_t> buf = capture->raw();
+	const size_t wavLen = loadQuestion(buf.data(), buf.size());
+	printf("BBMEASURE turn model_load_ms=%u question_bytes=%u\n", (unsigned) loadMs, (unsigned) wavLen);
+	printNow("loaded", true);
 
-	PcmPassthroughGen generator;
-	std::optional<AskClient> askClient; // created once on the worker task, never destroyed
+	// Cloud turn shape (#20 finding): with AFE + MultiNet resident too little internal RAM is left for Wi-Fi RX.
+	turn.glitches = afe->glitchStats();
+	afe->setMode(AudioFrontend::Mode::Off);
+	afe->unloadModel();
+	printNow("unloaded", true);
 
-	// Filled by the AskClient phase hook; printed after the turn so UART output doesn't skew the timings.
-	HeapSnapshot connected, playing, downloaded;
-
-	static void taskMain(void* arg){
-		auto* self = static_cast<Worker*>(arg);
-		for(;;){
-			ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-			self->runTurn();
-			self->busy = false;
-		}
+	if(wavLen == 0 || stopRequested() || !worker->submit(turn.id, buf.data(), wavLen)){
+		if(stopRequested()) printf("BBMEASURE turn error=aborted before_ask\n");
+		finish();
+		return;
 	}
+	turn.step = Step::Asking;
+}
 
-	void onPhase(AskPhase phase){
-		switch(phase){
-			case AskPhase::Connected:
-				connected = snapshot();
-				break;
-			case AskPhase::Playing:
-				playing = snapshot();
-				break;
-			case AskPhase::Downloaded:
-				downloaded = snapshot();
-				break;
-		}
-	}
+void reportAsk(const AskWorker& worker){
+	printNow("after_turn", true);
+	printHeap("connected", worker.phaseHeap().connected, true);
+	printHeap("playing", worker.phaseHeap().playing, true);
+	printHeap("downloaded", worker.phaseHeap().downloaded, true);
 
-	bool stopRequested() const{
-		return AskClient::aborted(turn);
-	}
-
-	bool waitOnline(){
-		WiFiService* wifi = ServiceLocator::WiFiServiceInstance;
-		if(wifi == nullptr) return false;
-		for(uint32_t waited = 0; waited < OnlineTimeoutMs && !stopRequested(); waited += OnlinePollMs){
-			if(wifi->waitOnline(OnlinePollMs)) return true;
-		}
-		return false;
-	}
-
-	/** Reads the canned question into `buf`. Returns its length, 0 on failure. */
-	static size_t loadQuestion(uint8_t* buf, size_t cap){
-		FILE* f = fopen(QuestionPath, "rb");
-		if(f == nullptr){
-			printf("BBMEASURE turn error=no_question_file path=%s\n", QuestionPath);
-			return 0;
-		}
-		const size_t n = fread(buf, 1, cap, f);
-		const bool tooBig = fgetc(f) != EOF;
-		fclose(f);
-		if(n == 0 || tooBig){
-			printf("BBMEASURE turn error=question_unreadable_or_over_%u_B\n", (unsigned) cap);
-			return 0;
-		}
-		return n;
-	}
-
-	void runTurn(){
-		const int64_t tStart = nowUs();
-		connected = playing = downloaded = HeapSnapshot{};
-
-		// The Wi-Fi core is fixed by sdkconfig, so compare core 0 and 1 with two builds (docs/measurement-build.md).
-#if CONFIG_ESP_WIFI_TASK_PINNED_TO_CORE_1
-		constexpr int WiFiCore = 1;
-#else
-		constexpr int WiFiCore = 0;
-#endif
-		printf("BBMEASURE turn start worker_core=%d wifi_core=%d lwip_max_sockets=%d capture_bytes=%u\n",
-			   (int) xPortGetCoreID(), WiFiCore, CONFIG_LWIP_MAX_SOCKETS, (unsigned) CaptureBytes);
-		printNow("idle", false);
-		const bool monitoring = heap_caps_monitor_local_minimum_free_size_start() == ESP_OK;
-
-		const Application* app = Application::getApp();
-		Audio* audio = app->getService<Audio>();
-		AudioFrontend* afe = app->getService<AudioFrontend>();
-		if(audio == nullptr || afe == nullptr){
-			printf("BBMEASURE turn error=missing_service\n");
-		}else if(!waitOnline()){
-			printf("BBMEASURE turn error=%s waited_ms=%u\n", stopRequested() ? "aborted" : "offline", (unsigned) msSince(tStart));
-		}else{
-			if(!askClient){
-				askClient.emplace(*audio, generator, [this](AskPhase phase){ onPhase(phase); });
-			}
-			runLoadedTurn(*afe);
-		}
-
-		printf("BBMEASURE stack task=DebugAsk size=%u min_free=%u\n", (unsigned) StackBytes,
-			   (unsigned) uxTaskGetStackHighWaterMark(nullptr));
-		if(monitoring){
-			heap_caps_monitor_local_minimum_free_size_stop();
-		}
-		printNow("cleanup", false);
-		printf("BBMEASURE turn end total_ms=%u\n", (unsigned) msSince(tStart));
-	}
-
-	/** Steps 2-5: models resident, capture buffer, the ask, and cleanup. */
-	void runLoadedTurn(AudioFrontend& afe){
-		if(stopRequested()){
-			printf("BBMEASURE turn error=aborted before_model_load\n");
-			return;
-		}
-
-		const int64_t tLoad = nowUs();
-		afe.loadModel(); // AFE + MultiNet, as ListenState does
-		afe.resetGlitchMeter();
-		afe.setMode(AudioFrontend::Mode::VAD);
-		const uint32_t loadMs = msSince(tLoad);
-
-		auto* capture = static_cast<uint8_t*>(heap_caps_malloc(CaptureBytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
-		if(capture == nullptr){
-			printf("BBMEASURE turn error=no_psram_for_capture bytes=%u\n", (unsigned) CaptureBytes);
-		}else{
-			const size_t wavLen = loadQuestion(capture, CaptureBytes);
-			printf("BBMEASURE turn model_load_ms=%u question_bytes=%u\n", (unsigned) loadMs, (unsigned) wavLen);
-			printNow("loaded", true);
-
-			// Cloud turn shape (#20 finding): recording is over before the upload, and with AFE + MultiNet
-			// resident only ~10 KB of internal RAM is left, too little for Wi-Fi RX, so the reply download
-			// stalls after a few KB. Unload them first; the "loaded" figures above are the with-MultiNet numbers.
-			const AfeGlitchMeter::Stats glitches = afe.glitchStats();
-			afe.setMode(AudioFrontend::Mode::Off);
-			afe.unloadModel();
-			printNow("unloaded", true);
-
-			if(wavLen > 0 && !stopRequested()){
-				const AskResult r = askClient->ask(turn, capture, wavLen);
-				printNow("after_turn", true);
-				printHeap("connected", connected, true);
-				printHeap("playing", playing, true);
-				printHeap("downloaded", downloaded, true);
-
-				char line[MeasureLineBytes];
-				formatAskMeasure(line, sizeof(line), r);
-				printf("%s\n", line);
-				formatAfeMeasure(line, sizeof(line), glitches);
-				printf("%s\n", line);
-			}
-		}
-
-		afe.setMode(AudioFrontend::Mode::Off);
-		afe.unloadModel();
-		heap_caps_free(capture);
-	}
-};
-
-Worker worker;
+	char line[MeasureLineBytes];
+	formatAskMeasure(line, sizeof(line), worker.result());
+	printf("%s\n", line);
+	formatAfeMeasure(line, sizeof(line), turn.glitches);
+	printf("%s\n", line);
+}
 
 }
 
 bool DebugAsk::start(){
-	return worker.start();
+	if(turn.step != Step::Idle) return false;
+	if(!ServiceLocator::AskWorkerInstance || !ServiceLocator::AskWorkerInstance->ok() || !ServiceLocator::VoiceCaptureInstance
+	   || ServiceLocator::WiFiServiceInstance == nullptr){
+		CMF_LOG(DebugAsk, LogLevel::Warning, "no ask worker, capture buffer or Wi-Fi service");
+		return false;
+	}
+
+	// Armed here, before waiting for Wi-Fi or loading models, so an abort from now on is never lost.
+	turn = Turn{};
+	turn.id = AskClient::beginTurn();
+	turn.tStart = nowUs();
+
+	// The Wi-Fi core is fixed by sdkconfig, so compare core 0 and 1 with two builds (docs/measurement-build.md).
+#if CONFIG_ESP_WIFI_TASK_PINNED_TO_CORE_1
+	constexpr int WiFiCore = 1;
+#else
+	constexpr int WiFiCore = 0;
+#endif
+	printf("BBMEASURE turn start worker_core=%d wifi_core=%d lwip_max_sockets=%d capture_bytes=%u\n",
+		   (int) AskWorker::Core, WiFiCore, CONFIG_LWIP_MAX_SOCKETS, (unsigned) VoiceCapture::BufferBytes);
+	printNow("idle", false);
+	turn.monitoring = heap_caps_monitor_local_minimum_free_size_start() == ESP_OK;
+	turn.step = Step::WaitOnline;
+	return true;
+}
+
+bool DebugAsk::poll(){
+	switch(turn.step){
+		case Step::Idle:
+			return false;
+
+		case Step::WaitOnline:
+			if(stopRequested()){
+				printf("BBMEASURE turn error=aborted waited_ms=%u\n", (unsigned) msSince(turn.tStart));
+				finish();
+			}else if(ServiceLocator::WiFiServiceInstance->isOnline()){
+				prepareAndSubmit();
+			}else if(msSince(turn.tStart) >= OnlineTimeoutMs){
+				printf("BBMEASURE turn error=offline waited_ms=%u\n", (unsigned) msSince(turn.tStart));
+				finish();
+			}
+			break;
+
+		case Step::Asking:
+			if(ServiceLocator::AskWorkerInstance->busy()) break;
+			reportAsk(*ServiceLocator::AskWorkerInstance);
+			finish();
+			break;
+	}
+	return turn.step != Step::Idle;
 }
 
 bool DebugAsk::running(){
-	return worker.running();
+	return turn.step != Step::Idle;
 }
 
 void DebugAsk::abort(){
-	worker.abort();
+	AskClient::abortInFlight();
 }
 
-bool DebugAsk::waitIdle(uint32_t timeoutMs){
-	const int64_t tStart = nowUs();
-	while(worker.running()){
-		if(msSince(tStart) >= timeoutMs) return false;
-		vTaskDelay(pdMS_TO_TICKS(IdlePollMs));
+void DebugAsk::stop(uint32_t warnEveryMs){
+	if(turn.step == Step::Idle) return;
+	abort();
+	// The worker reads the capture buffer until it is idle: wait it out before ending the turn (C7).
+	if(turn.step == Step::Asking){
+		while(!ServiceLocator::AskWorkerInstance->waitIdle(warnEveryMs)){
+			CMF_LOG(DebugAsk, LogLevel::Warning, "ask worker still busy, waiting another %u ms", (unsigned) warnEveryMs);
+		}
 	}
-	return true;
+	finish();
 }
 
 #endif

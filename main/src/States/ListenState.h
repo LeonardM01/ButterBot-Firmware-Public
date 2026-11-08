@@ -1,6 +1,7 @@
 #ifndef BUTTERBOT_FIRMWARE_LISTENSTATE_H
 #define BUTTERBOT_FIRMWARE_LISTENSTATE_H
 
+#include <atomic>
 #include "State.h"
 #include "CtrlData.h"
 #include "Audio/AudioFrontend.h"
@@ -15,9 +16,12 @@ public:
     static void preallocate();
 
 private:
-    Com* com;
+    Com* com = nullptr;
 
-    bool timedOut = false;
+    // Written on the AFE proc task (onPhrase) or in the constructor, read in the destructor.
+    std::atomic<bool> timedOut{false};
+    std::atomic<bool> askRequested{false}; // the recorded question goes to AskState; the turn goes on there
+    bool refused = false;                  // the models were not loaded (internal-RAM guard or a failed load)
 
     void onRC();
     void onPhrase(bool recognized, int index, const std::string& transcript, float confidence);

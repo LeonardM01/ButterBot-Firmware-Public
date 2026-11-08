@@ -3,9 +3,11 @@
 void PcmPassthroughGen::open(std::unique_ptr<AudioSource> source){
 	source->open();
 	this->source = std::move(source);
+	opened.store(true, std::memory_order_release);
 }
 
 void PcmPassthroughGen::close(){
+	opened.store(false, std::memory_order_release);
 	if(source == nullptr) return;
 	source->close();
 	source.reset();
