@@ -11,19 +11,21 @@
 namespace VoiceTurnGate {
 
 /**
- * Idle internal RAM a turn is refused below (decisions #9), calibrated from four question turns on the robot
- * (docs/voice-turn-memory.md, "Guard before the model load"). It can't certify a turn: it refuses one that
- * would start outside the range those turns ran in.
- * - Free: a turn took up to 38,116 B from idle (41,135 -> low 3,019). 38,912 (38 KiB) leaves such a turn
- *   796 B even if that demand is fixed, and sits 1,823 B under the lowest idle seen (40,735; idle varied by
- *   400 B). It refuses #20's reboot state (27,907 free).
- * - Largest: the load carved up to 7,168 B out of the largest block (26,624 -> 19,456). 16,384 (16 KiB) is
- *   over twice that and 9,216 B under the lowest idle largest (25,600). It refuses #20's 12,288.
- * Recalibrate from the `at=idle` and `int_min` lines once local commands, cancels, RC and a connected phone
- * have been measured.
+ * Idle internal RAM a turn is refused below (decisions #9), calibrated from question turns on the robot
+ * (docs/voice-turn-memory.md, "Guard before the turn"). It can't certify a turn: it refuses one that would start
+ * outside the range measured turns ran in.
+ * - Free: on the 17 Nov bench a turn took at most 8,736 B from idle (39,243 -> low 30,507) over five turns; the
+ *   dip to 3,019 B measured in #22 no longer happens since the phrase registration runs in the extmem window.
+ *   32,768 (32 KiB) leaves such a turn about 24 KB, and sits 5,171 B under the lowest idle seen, with the
+ *   controller connected over BLE (37,939; 38,463 after an RC session). It refuses #20's reboot state (27,907).
+ * - Largest: the load carved up to 7,168 B out of the largest block (26,624 -> 19,456). 14,336 (14 KiB) is
+ *   twice that. The Eight Ball routine loads the models outside this gate and can leave the largest block at
+ *   15,872 (17 Nov, turn7.log); the old 16 KiB refused every question after it until a reboot. It refuses #20's 12,288.
+ * Recalibrate from the `at=idle` and `int_min` lines when a turn runs with the controller connected, or when a
+ * turn's demand changes.
  */
-inline constexpr size_t MinIntFree = 38912;
-inline constexpr size_t MinIntLargest = 16384;
+inline constexpr size_t MinIntFree = 32768;
+inline constexpr size_t MinIntLargest = 14336;
 
 enum class Verdict : uint8_t {
 	Go,
