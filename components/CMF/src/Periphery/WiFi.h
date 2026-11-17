@@ -87,7 +87,9 @@ public:
     void stopScanning() const noexcept;
     void disconnect() const noexcept;
     int getConnectionRSSI() const noexcept;
-    void setTargetParameters(const std::string& ssid, const std::string& password) const noexcept;
+    // Sets the network the next connect() joins. False when the SSID or password is too long or the driver refuses
+    // the config; the driver then still holds the previous network, so the caller must not connect.
+    [[nodiscard]] bool setTargetParameters(const std::string& ssid, const std::string& password) const noexcept;
     std::vector<wifi_ap_record_t> getAPRecords(size_t maxScanSize) const noexcept;
 #endif
 
@@ -99,6 +101,11 @@ private:
 
 private:
     void onNativeEvent(uint32_t id, void* data) noexcept;
+
+    // Copies an SSID and password into fixed driver fields; false, with nothing written, if either is too long.
+    static bool copyCredentials(uint8_t* ssidField, size_t ssidSize, uint8_t* passwordField, size_t passwordSize,
+                                const std::string& ssid, const std::string& password) noexcept;
+
     void createNetif(StationAddressing addressing = StationAddressing::Static11) noexcept;
 };
 

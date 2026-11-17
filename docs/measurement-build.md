@@ -5,7 +5,7 @@ A dev build that runs one `/v1/ask` turn on a button press and prints RAM, PSRAM
 Never ship this build: it has a debug trigger, and except for the HTTPS run in section 5 it talks plain HTTP.
 
 The real voice turn (#22) needs no measurement build: section 8 runs its on-robot acceptance checks with
-`BB_DEBUG_ASK 0`.
+`BB_DEBUG_ASK 0`. Section 9 does the same for the home Wi-Fi (#21).
 
 ## 1. Set up `main/secrets.h`
 
@@ -43,7 +43,7 @@ idf.py -p <PORT> flash monitor | tee turn.log
 
 `flash` also writes the storage SPIFFS image with `/spiffs/debug/question.wav` in it (the file you copied in step 1).
 
-1. Wait for the `Wi-Fi online.` warning.
+1. Wait for the `WiFiService: Home Wi-Fi online: "<SSID>", IP …` warning.
 2. Leave the robot in Idle with no routine running. Hold the power button for **1 to 2.5 s**, then release. A tap (0.5 s or less) still listens as usual, and a 3 s hold still shuts down.
 3. The listen LED comes on. The robot loads the models, uploads, and plays the reply. The LED goes off when it's back in Idle.
 4. A power press during the turn aborts it, and so does entering RC mode.
@@ -222,7 +222,7 @@ No measurement build here: this tests the shipped voice turn against the laptop 
    Then switch the robot on with the usual 1 s power-button hold. The last argument is how long to record,
    in seconds (1200 s = 20 min). The first boot lines can be missed while USB enumerates; the `VoiceTurn`
    lines come later.
-3. Wait for `Wi-Fi online.` and the `VoiceTurn: heap at=online` line, then run the checks below in one boot,
+3. Wait for `Home Wi-Fi online` and the `VoiceTurn: heap at=online` line, then run the checks below in one boot,
    in this order. A short press (0.5 s or less) or the controller's Listen starts a turn.
 
 | # | Do | Expect | Grep |
@@ -231,7 +231,7 @@ No measurement build here: this tests the shipped voice turn against the laptop 
 | 5 | Ask a question ("what is the capital of France"). | Filler line with fast LED blink. The reply starts before the download ends (`first audio` < `down … ms`). Back to Idle | `ask: … question handed over`, `AskClient: ask: HTTP 200`, `AskWorker: stack min_free` |
 | 6 | Ask, then press the power button while the filler or reply plays. Again with the controller's ShutUp, and once while it is still connecting. | Stops at once and says "OK"/"Got it". The robot is back in Idle within about 0.5 s (connecting: up to the 5 s budget) | `AskClient: ask: … aborted` or `HTTP -1`; no reply after the abort phrase |
 | 6b | Ask, then enter RC from the controller while it thinks. | Silent stop, then RC mode | `AskWorker: stack min_free`, then `WiFiService`'s switch to the controller network |
-| 7 | Router off (or `BB_API_URL` host unreachable), wait for `Wi-Fi offline`, then ask. | The offline line ("My brain is out of Wi-Fi range"…). Local commands still work | `ask: offline` |
+| 7 | Router off (or `BB_API_URL` host unreachable), wait for `Home Wi-Fi offline`, then ask. | The offline line ("My brain is out of Wi-Fi range"…). Local commands still work | `ask: offline` |
 | 8 | Stop the API and ask. Then start it, pause it with `kill -STOP <api pid>` (it still accepts the connection but never answers) and ask; `kill -CONT` afterwards. | "My thoughts got lost…" both times | `connect failed`; then `no reply within 12000 ms` (or `upload failed` if the paused server's socket buffer fills) |
 | 9 | Press and say nothing. | "I did not understand that", no upload. (The decision: no-speech is local, a server 204 says the same line.) | `question=0, recorded 0 B` |
 | 10 | Ask one question that runs past 10 s. | Recording stops at 10 s, the question is asked anyway | `ask: 320044 B question handed over` |
@@ -250,3 +250,37 @@ No measurement build here: this tests the shipped voice turn against the laptop 
 
    What each value should look like, and why, is in `docs/voice-turn-memory.md`.
 5. Privacy (checklist 12): `grep -aiE "bearer|token|transcript" $L` shows only the boot's insecure-build warning.
+
+## 9. Home Wi-Fi acceptance on the robot (#21, checklist items 1–3 of #15)
+
+This tests the shipped build, so it needs no measurement build. Set up `main/secrets.h` and the laptop API as in section 8, step 1 (`BB_DEBUG_ASK 0`), and log the whole session to a file outside the repo as in section 8, step 2.
+Only item 3a needs the API. You also need the controller, and a phone hotspot or spare router that can broadcast
+an **open** network (no password).
+
+Every Wi-Fi line comes from the `WiFiService` tag at Warning level (`W (<ms>) WiFiService: …`). With `L` set to
+the log file as in section 8, step 4, `grep -aE "WiFiService|WiFiStation|AskClient" $L` shows the whole story. `<SSID>` is the home network's name from `secrets.h`. The
+`reason` is ESP-IDF's `wifi_err_reason_t`: 8 means we left, 200 is a beacon timeout (the AP vanished), 201 means
+no AP was found, and 210 or 211 mean no AP met the WPA2 floor.
+
+| # | Do | Expect on serial, in order | Fail if |
+|---|---|---|---|
+| 1a | Boot near the router. | `Joining home Wi-Fi "<SSID>".`, then `Home Wi-Fi online: "<SSID>", IP <a.b.c.d>.` with an address from the router's DHCP range | no `online` line, or `IP 11.0.0.2` / `IP 0.0.0.0` |
+| 1b | Turn the home router's Wi-Fi off (or carry the robot out of its range). Start an open hotspot with exactly `<SSID>` as its name. Reboot the robot and leave it for 2 minutes. | `Joining home Wi-Fi "<SSID>".`, then repeated `Home Wi-Fi disconnected (reason 201\|210\|211), retry in 1000 ms.`, `… 2000 ms`, `… 4000 ms`, up to `… 60000 ms` | any `Home Wi-Fi online` line, or the robot shows up in the hotspot's client list |
+| 1c | Switch the hotspot off and the router back on. | Within one retry (60 s at most, plus the router's boot), `Home Wi-Fi online: "<SSID>", IP …` | no `online` line within 2 minutes of the router being up |
+| 2 | Online and in Idle, power the router off for at least 3 minutes, then on again. Keep watching and listening to the robot. | `Home Wi-Fi offline: "<SSID>".` once, then `Home Wi-Fi disconnected (reason <200\|201\|…>), retry in 1000 ms.` and the delays doubling to `60000 ms`, where they stay. After power-on: `Home Wi-Fi online: "<SSID>", IP …` | the robot speaks, changes LEDs or leaves Idle because of Wi-Fi; a delay above 60000; `retry` lines stop before it is online; no `online` line within 2 minutes of the router being up (one capped 60 s retry, plus the scan, association and DHCP, as in 1c) |
+| 3a | Online, ask a question (short press), and while the filler plays or the LED blinks, enter RC from the controller. | `AskClient: ask: HTTP … aborted` (or `HTTP -1`), `AskWorker: stack min_free …`, `Home Wi-Fi offline: "<SSID>".`, `Leaving home Wi-Fi for RC mode.`, `WiFiStation: Attempting connect to the controller network.`, `WiFiStation: onConnected event`. No reply plays, and the robot drives | a reply plays after RC starts, the RC entry waits for the reply, or there is no `onConnected` |
+| 3b | Exit RC from the controller. | `Rejoining home Wi-Fi "<SSID>".`, then `Home Wi-Fi online: "<SSID>", IP <a.b.c.d>.` with an address from the home DHCP range again | `IP 11.0.0.2`, a `Home Wi-Fi disconnected` line for the controller network, no `online` line |
+| 3c | Ask a question again. | A normal turn: `AskClient: ask: HTTP 200 …` and the reply plays | `ask: offline` or `connect failed` |
+
+The timestamps between `retry in` lines grow by the stated delay, plus the few seconds each failed attempt
+spends scanning. Item 2 must not change what the robot does: no sound, no LED change and no state change until
+you use it.
+
+Finally, check that the password never reaches serial (checklist 12). Type it without echo, so it stays out of
+the shell history:
+
+```sh
+read -s PW; grep -acF "$PW" $L; unset PW   # prints 0
+```
+
+Record pass or fail for each row, and the router model, as a comment on issue #21.

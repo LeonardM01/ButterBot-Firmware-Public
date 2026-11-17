@@ -12,6 +12,7 @@
 #include <Services/Audio/Audio.h>
 #include "Audio/StreamingPcmSource.h"
 #include "Util/Elapsed.h"
+#include "PlaybackStart.h"
 #include "SampleAligner.h"
 #include "UrlPolicy.h"
 #include "WavStreamParser.h"
@@ -49,11 +50,11 @@ constexpr size_t ReadChunkBytes = 2048;   // small, so PCM reaches the ring buff
 constexpr uint32_t PollMs = 500;          // socket timeout while waiting, bounds abort latency
 
 constexpr uint32_t StallTimeoutMs = 12000;                 // longest gap between reply bytes once the reply has started
-constexpr size_t PrebufferBytes = 16 * 1024;               // PCM buffered before playback starts (0.5 s)
 constexpr size_t MinRingBytes = 2 * ReadChunkBytes;
 constexpr size_t UnknownLengthRingBytes = 64 * 1024;       // ring when the reply length is unknown (2 s)
 constexpr size_t MaxRingBytes = 640 * 1024;                // a 20 s reply (#7 point 5) fits without back-pressure
 constexpr size_t MaxReplyPcmBytes = 30 * PcmStream::BytesPerSecond; // played at most (30 s); the server caps replies at ~20 s
+static_assert(PlaybackStart::BytesPerSecond == PcmStream::BytesPerSecond);
 
 struct HttpCleanup {
 	void operator()(esp_http_client* client) const{ esp_http_client_cleanup(client); }
@@ -133,6 +134,7 @@ private:
 	size_t pcmBudget = MaxReplyPcmBytes;
 	size_t pcmAccepted = 0; // PCM bytes taken from the reply (within budget)
 	size_t pcmQueued = 0;   // PCM bytes written to the ring
+	size_t replyPcmBytes = 0; // the reply's PCM length when known, else 0 (PlaybackStart::ready)
 	int64_t tFirstByte = 0;
 	int64_t tLastByte = 0;
 
@@ -331,7 +333,7 @@ private:
 			// Waiting for room in the ring is back-pressure, not a stalled server.
 			tLastProgress = nowUs();
 
-			if(!playing && stream->buffered() >= PrebufferBytes){
+			if(!playing && PlaybackStart::ready(pcmQueued, replyPcmBytes, msSince(tFirstByte))){
 				startPlayback();
 			}
 
@@ -357,15 +359,14 @@ private:
 	 * is known, so the download runs at network speed instead of playback speed.
 	 */
 	bool createStream(){
-		std::optional<size_t> replyPcmBytes;
 		if(const auto dataBytes = parser.dataBytes()){
 			pcmBudget = std::min<size_t>(pcmBudget, *dataBytes);
 			replyPcmBytes = pcmBudget;
 		}else if(contentLength > 0){
 			replyPcmBytes = std::min<size_t>(pcmBudget, (size_t) contentLength);
 		}
-		const size_t ringBytes = replyPcmBytes ? std::clamp<size_t>((*replyPcmBytes + 3) & ~(size_t) 3, MinRingBytes, MaxRingBytes)
-											   : UnknownLengthRingBytes;
+		const size_t ringBytes = replyPcmBytes != 0 ? std::clamp<size_t>((replyPcmBytes + 3) & ~(size_t) 3, MinRingBytes, MaxRingBytes)
+													 : UnknownLengthRingBytes;
 		stream = PcmStream::create(ringBytes);
 		if(!stream){
 			CMF_LOG(AskClient, LogLevel::Warning, "ask: out of PSRAM for a %u B ring buffer", (unsigned) ringBytes);

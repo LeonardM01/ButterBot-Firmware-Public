@@ -62,3 +62,11 @@ bool WiFiCredentials::loadHome(Home& out, const char* ssid, const char* password
 
 	return true;
 }
+
+void WiFiCredentials::wipe(void* buffer, size_t size) noexcept{
+	// Stores through a volatile pointer are observable behaviour, so they survive even when `buffer` dies next.
+	volatile uint8_t* bytes = static_cast<volatile uint8_t*>(buffer);
+	for(size_t i = 0; i < size; ++i){
+		bytes[i] = 0;
+	}
+}

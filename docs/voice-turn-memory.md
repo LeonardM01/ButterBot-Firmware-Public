@@ -138,8 +138,8 @@ logs the reason and says the "thoughts got lost" line, then goes back to Idle (d
 
 | Threshold | Value | Derived from | Margin |
 |---|---|---|---|
-| Internal free | **38,912** | A turn took up to 38,116 from idle (41,135 → 3,019). | If that demand is fixed, a turn starting at 38,912 keeps 796. The lowest idle seen (40,735) is 1,823 above it. Idle varied by 400 over four turns |
-| Internal largest block | **16,384** | The load carved up to 7,168 out of the largest block (26,624 → 19,456). | Over twice that. The lowest idle largest (25,600) is 9,216 above it |
+| Internal free | **32,768** | 17 Nov bench, five question turns: a turn took at most 8,736 from idle (39,243 → 30,507). #22's dip to 3,019 no longer happens. | A turn starting at 32,768 keeps about 24 KB. The lowest idle seen, with the controller connected over BLE, is 37,939 (38,463 after an RC session): 5,171 above it. The old 38,912 refused every turn in both states |
+| Internal largest block | **14,336** | The load carved up to 7,168 out of the largest block (26,624 → 19,456). | Twice that. The Eight Ball routine loads the models outside the guard and left the largest block at 15,872 (17 Nov, turn7.log); the old 16,384 then refused every question until a reboot. Still refuses #20's 12,288 |
 
 What the guard can catch:
 
@@ -153,9 +153,9 @@ What it can't catch:
   turn, not during it.
 - A dip that is greedy rather than fixed. Then the threshold is conservative, and it may refuse turns that
   would have worked.
-- States not measured yet: after local commands, cancels or RC, and with a phone connected over BLE (ANCS,
-  AMS). If one of those idles below 38,912, the guard refuses every turn there and logs
-  `Not loading the speech models: internal RAM free … (need 38912)`. Recalibrate from that state's `at=idle`
+- A turn's demand while the controller is connected: its idle (37,939) is measured, but no question has run in
+  that state yet. Nor with a phone connected over BLE (ANCS, AMS). If a state idles below 32,768, the guard
+  refuses every turn there and logs `Not loading the speech models: internal RAM free … (need 32768)`. Recalibrate from that state's `at=idle`
   and `int_min` lines rather than lowering the value blindly.
 
 What really protects repeated turns is the bulleted list below, not the guard. The guard is the net under it.
@@ -217,7 +217,7 @@ build adds `debug/question.wav` (68,480 B), for 143,288 B.
 Each turn logs up to eight `VoiceTurn` lines, plus one at boot:
 
 ```
-I (…) VoiceTurn: heap at=online int_free=… int_min=… int_largest=… psram_free=… psram_largest=… guard_free=38912 guard_largest=16384
+I (…) VoiceTurn: heap at=online int_free=… int_min=… int_largest=… psram_free=… psram_largest=… guard_free=32768 guard_largest=14336
 I (…) VoiceTurn: heap turn=N at=idle       int_free=… int_min=… int_largest=… psram_free=… psram_largest=…
 I (…) VoiceTurn: heap turn=N at=loaded     …
 I (…) VoiceTurn: heap turn=N at=listening  …
@@ -230,13 +230,13 @@ I (…) VoiceTurn: heap turn=N at=after      …
 
 The lines carry sizes only: no token, transcript or reply text. `AskWorker: stack min_free=…` follows every
 ask (M1). A refused turn logs either `ListenState: Not listening: the last question is still being asked` or
-`ListenState: Not loading the speech models: internal RAM free … (need 38912), largest block … (need 16384)`.
+`ListenState: Not loading the speech models: internal RAM free … (need 32768), largest block … (need 14336)`.
 
 What to check across 5 or more turns in one boot, mixing questions, local commands and cancels (see
 `docs/measurement-build.md` section 8 for the procedure):
 
 1. `grep "VoiceTurn: heap turn=.* at=idle"`: `int_free` and `int_largest` stay within about 600 of turn 1's
-   on every turn, and above 38,912 / 16,384. Note the idle value after local commands, cancels and RC, and
+   on every turn, and above 32,768 / 14,336. Note the idle value after local commands, cancels and RC, and
    with a phone connected.
 2. `grep "at=loaded"`: `int_min` stays about 8 KB below idle (32.4–32.9 KB measured).
 3. `grep -E "at=(listening|unloaded|network)"`: the first of them whose `int_min` drops to a few KB places the

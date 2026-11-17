@@ -158,7 +158,36 @@ static void test_load_home_rejects_a_65_character_password(){
 	assertHomeEmpty(home);
 }
 
+static void test_home_buffers_hold_the_longest_legal_values_plus_a_terminator(){
+	// Decision #9: SSID char[33], password char[65], separate from RCData's 16-byte fields.
+	TEST_ASSERT_EQUAL(33, sizeof(WiFiCredentials::Home::ssid));
+	TEST_ASSERT_EQUAL(65, sizeof(WiFiCredentials::Home::password));
+}
+
+static void test_copy_to_field_stores_a_64_digit_psk_in_the_full_password_field(){
+	struct { uint8_t password[64]; uint8_t next[4]; } sta;
+	memset(&sta, 0xAA, sizeof(sta));
+	const char* hex64 = "0123456789abcdefABCDEF0123456789abcdefABCDEF0123456789abcdef0123";
+
+	TEST_ASSERT_TRUE(WiFiCredentials::copyToField(sta.password, sizeof(sta.password), hex64));
+	TEST_ASSERT_EQUAL_MEMORY(hex64, sta.password, 64);
+	TEST_ASSERT_EQUAL_HEX8(0xAA, sta.next[0]);
+}
+
+static void test_wipe_clears_a_buffer_that_held_a_password(){
+	uint8_t field[64];
+	memcpy(field, "correct horse battery staple", 29);
+	const uint8_t zeros[64] = {};
+
+	WiFiCredentials::wipe(field, sizeof(field));
+
+	TEST_ASSERT_EQUAL_MEMORY(zeros, field, sizeof(field));
+}
+
 void runCredentialTests(){
+	RUN_TEST(test_home_buffers_hold_the_longest_legal_values_plus_a_terminator);
+	RUN_TEST(test_copy_to_field_stores_a_64_digit_psk_in_the_full_password_field);
+	RUN_TEST(test_wipe_clears_a_buffer_that_held_a_password);
 	RUN_TEST(test_copy_string_copies_and_terminates);
 	RUN_TEST(test_copy_string_accepts_a_value_that_exactly_fills_the_buffer);
 	RUN_TEST(test_copy_string_rejects_an_overlong_value_and_leaves_the_buffer_empty);

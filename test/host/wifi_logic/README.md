@@ -4,6 +4,7 @@ Unit tests for the ESP-IDF-free parts of the Wi-Fi service, run on the laptop (n
 
 - `main/src/Services/WiFi/WiFiCredentials.{h,cpp}`: length-checked credential copies and WPA2 validity rules.
 - `main/src/Services/WiFi/WiFiBackoff.{h,cpp}`: the reconnect schedule (1 s doubling to a 60 s cap).
+- `main/src/Services/WiFi/WiFiLink.{h,cpp}`: the home link's decisions that `WiFiService` carries out: retrying every drop on that schedule forever, resetting it on a lease, the online/offline transitions, and ignoring the controller network in and after RC mode.
 
 This is a separate ESP-IDF project built for the `linux` target with Unity. It compiles those sources straight from `main/src`, so the robot and the tests run the same code.
 

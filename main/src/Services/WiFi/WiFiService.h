@@ -4,11 +4,13 @@
 #include <cstdint>
 #include <mutex>
 #include <esp_event.h>
+#include <esp_netif_types.h>
 #include <esp_timer.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/event_groups.h>
 #include <Periphery/WiFi.h>
 #include "WiFiCredentials.h"
+#include "WiFiLink.h"
 
 /**
  * Owns the Wi-Fi radio (the CMF WiFi periphery) for the whole runtime.
@@ -18,8 +20,10 @@
  *
  * Home profile (the default): joins the network from secrets.h with DHCP and DNS, rejects anything weaker than
  * WPA2-PSK, PMF capable, modem sleep on (required next to BLE), driver config kept in RAM only. A drop is retried
- * forever on the WiFiBackoff schedule. Online means IP_EVENT_STA_GOT_IP has arrived with no disconnect or lost IP
- * since. Transitions are logged at Warning; credentials are never logged.
+ * forever on the WiFiBackoff schedule, from the sys_evt and esp_timer tasks, so nothing here blocks the state machine,
+ * Audio or the LEDs. Online means IP_EVENT_STA_GOT_IP has arrived with no disconnect or lost IP since. The decisions
+ * live in WiFiLink (host-tested); this class only carries them out on the driver. Transitions and retries are logged
+ * at Warning with the SSID; the password is never logged.
  *
  * Controller profile (RC mode): RCState borrows the radio, which runs on the controller network at the static
  * 11.0.0.2 with the existing WiFiStation logic and no reconnect from this service. Always offline.
@@ -44,21 +48,15 @@ public:
 	void useHomeProfile() noexcept;
 
 private:
-	enum class Profile : uint8_t {
-		Home,
-		Controller
-	};
-
 	static constexpr EventBits_t OnlineBit = BIT0;
 
 	StrongObjectPtr<WiFi> wifi;
 	WiFiCredentials::Home home;
-	bool homeValid = false;
+	const bool homeValid;
 
-	// Guards profile, attempt and the reconnect timer across the state machine, sys_evt and esp_timer tasks.
+	// Guards `link` and the reconnect timer across the state machine, sys_evt and esp_timer tasks (C7).
 	std::mutex lock;
-	Profile profile = Profile::Home;
-	uint32_t attempt = 0;
+	WiFiLink link;
 	esp_timer_handle_t reconnectTimer = nullptr;
 
 	StaticEventGroup_t eventsBuffer;
@@ -72,15 +70,14 @@ private:
 	static void onReconnectTimer(void* arg);
 
 	void onDisconnected(const wifi_event_sta_disconnected_t& event) noexcept;
-	void onGotIP() noexcept;
+	void onGotIP(const ip_event_got_ip_t* event) noexcept;
 	void onLostIP() noexcept;
 
 	void applyHomeConfig() noexcept;
 	void connectHomeLocked() noexcept;
-	// Arms the reconnect timer for the next backoff step and returns its delay.
-	uint32_t scheduleReconnectLocked() noexcept;
-	void setOnlineLocked() noexcept;
-	void setOfflineLocked() noexcept;
+	// Carries out a WiFiLink step: mirrors and logs an online change (with the leased address), arms the reconnect
+	// timer.
+	void applyLocked(WiFiLink::Step step) noexcept;
 };
 
 #endif //BUTTERBOT_FIRMWARE_WIFISERVICE_H
