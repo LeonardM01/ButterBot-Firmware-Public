@@ -116,7 +116,7 @@ void WiFiService::onEvent(void* arg, esp_event_base_t base, int32_t id, void* da
 	if(base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED && data != nullptr){
 		self->onDisconnected(*static_cast<const wifi_event_sta_disconnected_t*>(data));
 	}else if(base == IP_EVENT && id == IP_EVENT_STA_GOT_IP){
-		self->onGotIP();
+		self->onGotIP(static_cast<const ip_event_got_ip_t*>(data));
 	}else if(base == IP_EVENT && id == IP_EVENT_STA_LOST_IP){
 		self->onLostIP();
 	}
@@ -147,9 +147,9 @@ void WiFiService::onDisconnected(const wifi_event_sta_disconnected_t& event) noe
 	}
 }
 
-void WiFiService::onGotIP() noexcept{
+void WiFiService::onGotIP(const ip_event_got_ip_t* event) noexcept{
 	std::lock_guard guard(lock);
-	applyLocked(link.gotIP());
+	applyLocked(link.gotIP(), event != nullptr ? &event->ip_info : nullptr);
 }
 
 void WiFiService::onLostIP() noexcept{
@@ -198,11 +198,13 @@ void WiFiService::connectHomeLocked() noexcept{
 	}
 }
 
-void WiFiService::applyLocked(WiFiLink::Step step) noexcept{
+void WiFiService::applyLocked(WiFiLink::Step step, const esp_netif_ip_info_t* ip) noexcept{
 	if(step.changed){
 		if(link.online()){
 			xEventGroupSetBits(events, OnlineBit);
-			CMF_LOG(WiFiService, LogLevel::Warning, "Home Wi-Fi online: \"%s\".", home.ssid);
+			// The leased (DHCP) address, so a tester can tell it from RC mode's static 11.0.0.2. No credentials.
+			const esp_ip4_addr_t addr = ip != nullptr ? ip->ip : esp_ip4_addr_t{};
+			CMF_LOG(WiFiService, LogLevel::Warning, "Home Wi-Fi online: \"%s\", IP " IPSTR ".", home.ssid, IP2STR(&addr));
 		}else{
 			xEventGroupClearBits(events, OnlineBit);
 			CMF_LOG(WiFiService, LogLevel::Warning, "Home Wi-Fi offline: \"%s\".", home.ssid);

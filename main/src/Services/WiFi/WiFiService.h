@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <mutex>
 #include <esp_event.h>
+#include <esp_netif_types.h>
 #include <esp_timer.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/event_groups.h>
@@ -70,13 +71,14 @@ private:
 	static void onReconnectTimer(void* arg);
 
 	void onDisconnected(const wifi_event_sta_disconnected_t& event) noexcept;
-	void onGotIP() noexcept;
+	void onGotIP(const ip_event_got_ip_t* event) noexcept;
 	void onLostIP() noexcept;
 
 	void applyHomeConfig() noexcept;
 	void connectHomeLocked() noexcept;
-	// Carries out a WiFiLink step: mirrors and logs an online change, arms the reconnect timer.
-	void applyLocked(WiFiLink::Step step) noexcept;
+	// Carries out a WiFiLink step: mirrors and logs an online change (with the leased address, when given), arms
+	// the reconnect timer.
+	void applyLocked(WiFiLink::Step step, const esp_netif_ip_info_t* ip = nullptr) noexcept;
 };
 
 #endif //BUTTERBOT_FIRMWARE_WIFISERVICE_H
