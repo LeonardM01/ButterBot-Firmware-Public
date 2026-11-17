@@ -51,7 +51,6 @@ private:
 	static constexpr EventBits_t OnlineBit = BIT0;
 
 	StrongObjectPtr<WiFi> wifi;
-	// Declared in this order: `link` views `home.ssid`, which `homeValid`'s initialiser fills.
 	WiFiCredentials::Home home;
 	const bool homeValid;
 

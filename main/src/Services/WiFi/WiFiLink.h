@@ -19,10 +19,10 @@ public:
 		// Arm the reconnect timer for this long; 0 means no retry.
 		uint32_t retryInMs = 0;
 		// The online state flipped (see online()): log the transition.
-		bool changed = false;
+		bool onlineChanged = false;
 	};
 
-	// `homeSsid` must outlive the link.
+	// Keeps its own copy of `homeSsid`. One longer than an SSID's 32 bytes is not kept, so only unnamed drops match.
 	explicit WiFiLink(std::string_view homeSsid) noexcept;
 
 	// WIFI_EVENT_STA_DISCONNECTED for the network named `ssid` (may be empty). In the home profile a drop from
@@ -51,7 +51,8 @@ public:
 	bool online() const noexcept;
 
 private:
-	const std::string_view homeSsid;
+	// NUL-terminated (C2): an SSID is at most 32 bytes.
+	char homeSsid[33] = {};
 	bool home = true;
 	bool isOnline = false;
 	uint32_t attempt = 0;

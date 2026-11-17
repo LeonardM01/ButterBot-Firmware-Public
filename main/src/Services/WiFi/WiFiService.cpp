@@ -22,7 +22,7 @@ static void check(esp_err_t err, const char* what, esp_err_t benign = ESP_OK){
 }
 
 WiFiService::WiFiService() noexcept : homeValid(WiFiCredentials::loadHome(home, BB_WIFI_SSID, BB_WIFI_PASSWORD)),
-									  link(home.ssid){
+									  link(BB_WIFI_SSID){
 	events = xEventGroupCreateStatic(&eventsBuffer);
 
 	if(!homeValid){
@@ -199,7 +199,7 @@ void WiFiService::connectHomeLocked() noexcept{
 }
 
 void WiFiService::applyLocked(WiFiLink::Step step, const esp_netif_ip_info_t* ip) noexcept{
-	if(step.changed){
+	if(step.onlineChanged){
 		if(link.online()){
 			xEventGroupSetBits(events, OnlineBit);
 			// The leased (DHCP) address, so a tester can tell it from RC mode's static 11.0.0.2. No credentials.

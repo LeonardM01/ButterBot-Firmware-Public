@@ -42,7 +42,7 @@ static void test_online_only_once_an_address_is_leased(){
 	const WiFiLink::Step step = link.gotIP();
 
 	TEST_ASSERT_TRUE(link.online());
-	TEST_ASSERT_TRUE(step.changed);
+	TEST_ASSERT_TRUE(step.onlineChanged);
 	TEST_ASSERT_EQUAL_UINT32(0, step.retryInMs);
 }
 
@@ -50,11 +50,11 @@ static void test_each_transition_is_reported_once(){
 	WiFiLink link("HomeNet");
 	link.gotIP();
 
-	TEST_ASSERT_FALSE(link.gotIP().changed); // a renewed lease is not a new transition
+	TEST_ASSERT_FALSE(link.gotIP().onlineChanged); // a renewed lease is not a new transition
 
-	TEST_ASSERT_TRUE(link.disconnected("HomeNet").changed);
+	TEST_ASSERT_TRUE(link.disconnected("HomeNet").onlineChanged);
 	TEST_ASSERT_FALSE(link.online());
-	TEST_ASSERT_FALSE(link.disconnected("HomeNet").changed); // a failed retry while already offline
+	TEST_ASSERT_FALSE(link.disconnected("HomeNet").onlineChanged); // a failed retry while already offline
 }
 
 static void test_a_lost_lease_goes_offline_without_a_retry(){
@@ -65,7 +65,7 @@ static void test_a_lost_lease_goes_offline_without_a_retry(){
 	const WiFiLink::Step step = link.lostIP();
 
 	TEST_ASSERT_FALSE(link.online());
-	TEST_ASSERT_TRUE(step.changed);
+	TEST_ASSERT_TRUE(step.onlineChanged);
 	TEST_ASSERT_EQUAL_UINT32(0, step.retryInMs);
 }
 
@@ -81,16 +81,16 @@ static void test_rc_mode_goes_offline_and_never_retries_home(){
 	WiFiLink link("HomeNet");
 	link.gotIP();
 
-	TEST_ASSERT_TRUE(link.useController().changed);
+	TEST_ASSERT_TRUE(link.useController().onlineChanged);
 	TEST_ASSERT_FALSE(link.online());
 	TEST_ASSERT_FALSE(link.homeActive());
 
 	// The controller network's own events: its drops are WiFiStation's business, its static address isn't online.
 	const WiFiLink::Step drop = link.disconnected("ButterCtrl");
 	TEST_ASSERT_EQUAL_UINT32(0, drop.retryInMs);
-	TEST_ASSERT_FALSE(drop.changed);
+	TEST_ASSERT_FALSE(drop.onlineChanged);
 	TEST_ASSERT_EQUAL_UINT32(0, link.connectFailed().retryInMs);
-	TEST_ASSERT_FALSE(link.gotIP().changed);
+	TEST_ASSERT_FALSE(link.gotIP().onlineChanged);
 	TEST_ASSERT_FALSE(link.online());
 }
 
@@ -136,7 +136,18 @@ static void test_a_full_32_byte_home_ssid_matches_its_unterminated_event_name(){
 	TEST_ASSERT_EQUAL_UINT32(0, link.disconnected(std::string_view(eventSsid, 31)).retryInMs);
 }
 
+static void test_the_link_keeps_its_own_copy_of_the_home_ssid(){
+	char ssid[33] = "HomeNet";
+	WiFiLink link(ssid);
+
+	ssid[0] = 'X'; // the caller's buffer changes, or goes away
+
+	TEST_ASSERT_EQUAL_UINT32(1000, link.disconnected("HomeNet").retryInMs);
+	TEST_ASSERT_EQUAL_UINT32(0, link.disconnected("XomeNet").retryInMs);
+}
+
 void runLinkTests(){
+	RUN_TEST(test_the_link_keeps_its_own_copy_of_the_home_ssid);
 	RUN_TEST(test_rc_mode_goes_offline_and_never_retries_home);
 	RUN_TEST(test_leaving_rc_rejoins_home_on_a_fresh_schedule);
 	RUN_TEST(test_the_controller_drop_after_leaving_rc_is_not_a_home_failure);

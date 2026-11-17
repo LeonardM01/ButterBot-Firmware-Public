@@ -1,10 +1,16 @@
 #include "WiFiLink.h"
+#include <cstring>
 #include "WiFiBackoff.h"
 
-WiFiLink::WiFiLink(std::string_view homeSsid) noexcept : homeSsid(homeSsid){}
+WiFiLink::WiFiLink(std::string_view ssid) noexcept{
+	// Bounded copy (C1); the zero-initialised tail terminates it.
+	if(ssid.size() < sizeof(homeSsid)){
+		memcpy(homeSsid, ssid.data(), ssid.size());
+	}
+}
 
 WiFiLink::Step WiFiLink::disconnected(std::string_view ssid) noexcept{
-	if(!ssid.empty() && ssid != homeSsid){
+	if(!ssid.empty() && ssid != std::string_view(homeSsid)){
 		return {};
 	}
 
