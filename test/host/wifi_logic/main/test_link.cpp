@@ -1,6 +1,13 @@
 #include <unity.h>
 #include "WiFiLink.h"
 
+// An IPv4 address as esp_ip4_addr_t::addr holds it (ESP_IP4TOADDR): the first octet in the low byte.
+static constexpr uint32_t ip4(uint32_t a, uint32_t b, uint32_t c, uint32_t d){
+	return a | (b << 8) | (c << 16) | (d << 24);
+}
+
+static constexpr uint32_t Leased = ip4(192, 168, 1, 23);
+
 static void test_drops_retry_after_one_second_then_double(){
 	WiFiLink link("HomeNet");
 
@@ -30,7 +37,7 @@ static void test_a_lease_resets_the_schedule(){
 	link.disconnected("HomeNet");
 	link.disconnected("HomeNet");
 
-	link.gotIP();
+	link.gotIP(Leased);
 
 	TEST_ASSERT_EQUAL_UINT32(1000, link.disconnected("HomeNet").retryInMs);
 }
@@ -39,18 +46,42 @@ static void test_online_only_once_an_address_is_leased(){
 	WiFiLink link("HomeNet");
 	TEST_ASSERT_FALSE(link.online());
 
-	const WiFiLink::Step step = link.gotIP();
+	const WiFiLink::Step step = link.gotIP(Leased);
 
 	TEST_ASSERT_TRUE(link.online());
 	TEST_ASSERT_TRUE(step.onlineChanged);
 	TEST_ASSERT_EQUAL_UINT32(0, step.retryInMs);
 }
 
+static void test_online_reports_the_leased_address(){
+	WiFiLink link("HomeNet");
+
+	link.gotIP(Leased);
+
+	TEST_ASSERT_EQUAL_HEX32(Leased, link.address());
+}
+
+static void test_a_stale_rc_static_address_after_leaving_rc_is_not_online(){
+	// RC's static 11.0.0.2 raises GOT_IP too; one still queued when the home profile is back is not a lease.
+	WiFiLink link("HomeNet");
+	link.useController();
+	link.useHome();
+
+	const WiFiLink::Step step = link.gotIP(ip4(11, 0, 0, 2));
+
+	TEST_ASSERT_FALSE(step.onlineChanged);
+	TEST_ASSERT_FALSE(link.online());
+
+	// The home lease that follows still counts.
+	TEST_ASSERT_TRUE(link.gotIP(Leased).onlineChanged);
+	TEST_ASSERT_EQUAL_HEX32(Leased, link.address());
+}
+
 static void test_each_transition_is_reported_once(){
 	WiFiLink link("HomeNet");
-	link.gotIP();
+	link.gotIP(Leased);
 
-	TEST_ASSERT_FALSE(link.gotIP().onlineChanged); // a renewed lease is not a new transition
+	TEST_ASSERT_FALSE(link.gotIP(Leased).onlineChanged); // a renewed lease is not a new transition
 
 	TEST_ASSERT_TRUE(link.disconnected("HomeNet").onlineChanged);
 	TEST_ASSERT_FALSE(link.online());
@@ -60,7 +91,7 @@ static void test_each_transition_is_reported_once(){
 static void test_a_lost_lease_goes_offline_without_a_retry(){
 	// Still associated: DHCP renews on its own and raises GOT_IP again.
 	WiFiLink link("HomeNet");
-	link.gotIP();
+	link.gotIP(Leased);
 
 	const WiFiLink::Step step = link.lostIP();
 
@@ -79,7 +110,7 @@ static void test_a_connect_that_fails_to_start_retries_on_the_same_schedule(){
 
 static void test_rc_mode_goes_offline_and_never_retries_home(){
 	WiFiLink link("HomeNet");
-	link.gotIP();
+	link.gotIP(Leased);
 
 	TEST_ASSERT_TRUE(link.useController().onlineChanged);
 	TEST_ASSERT_FALSE(link.online());
@@ -90,7 +121,7 @@ static void test_rc_mode_goes_offline_and_never_retries_home(){
 	TEST_ASSERT_EQUAL_UINT32(0, drop.retryInMs);
 	TEST_ASSERT_FALSE(drop.onlineChanged);
 	TEST_ASSERT_EQUAL_UINT32(0, link.connectFailed().retryInMs);
-	TEST_ASSERT_FALSE(link.gotIP().onlineChanged);
+	TEST_ASSERT_FALSE(link.gotIP(Leased).onlineChanged);
 	TEST_ASSERT_FALSE(link.online());
 }
 
@@ -157,6 +188,8 @@ void runLinkTests(){
 	RUN_TEST(test_a_connect_that_fails_to_start_retries_on_the_same_schedule);
 	RUN_TEST(test_online_only_once_an_address_is_leased);
 	RUN_TEST(test_each_transition_is_reported_once);
+	RUN_TEST(test_online_reports_the_leased_address);
+	RUN_TEST(test_a_stale_rc_static_address_after_leaving_rc_is_not_online);
 	RUN_TEST(test_drops_retry_after_one_second_then_double);
 	RUN_TEST(test_retries_forever_at_the_sixty_second_cap);
 	RUN_TEST(test_a_lease_resets_the_schedule);

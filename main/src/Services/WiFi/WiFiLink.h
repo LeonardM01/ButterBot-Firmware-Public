@@ -32,8 +32,9 @@ public:
 	// esp_wifi_connect() returned an error, so no disconnect event will follow.
 	Step connectFailed() noexcept;
 
-	// IP_EVENT_STA_GOT_IP: DHCP leased an address.
-	Step gotIP() noexcept;
+	// IP_EVENT_STA_GOT_IP with `ipv4` as esp_ip4_addr_t::addr holds it (first octet in the low byte): DHCP leased
+	// an address. RC mode's static 11.0.0.2 is never a home lease, even when its event arrives after useHome().
+	Step gotIP(uint32_t ipv4) noexcept;
 
 	// IP_EVENT_STA_LOST_IP: the lease expired while associated. DHCP keeps trying, so no retry.
 	Step lostIP() noexcept;
@@ -50,11 +51,15 @@ public:
 	// Online means an address was leased and no disconnect or lost lease followed. Starts offline.
 	bool online() const noexcept;
 
+	// The last leased address, in gotIP()'s byte order; meaningful while online().
+	uint32_t address() const noexcept;
+
 private:
 	// NUL-terminated (C2): an SSID is at most 32 bytes.
 	char homeSsid[33] = {};
 	bool home = true;
 	bool isOnline = false;
+	uint32_t lease = 0;
 	uint32_t attempt = 0;
 
 private:

@@ -148,8 +148,10 @@ void WiFiService::onDisconnected(const wifi_event_sta_disconnected_t& event) noe
 }
 
 void WiFiService::onGotIP(const ip_event_got_ip_t* event) noexcept{
+	const uint32_t ipv4 = event != nullptr ? event->ip_info.ip.addr : 0;
+
 	std::lock_guard guard(lock);
-	applyLocked(link.gotIP(), event != nullptr ? &event->ip_info : nullptr);
+	applyLocked(link.gotIP(ipv4));
 }
 
 void WiFiService::onLostIP() noexcept{
@@ -198,12 +200,12 @@ void WiFiService::connectHomeLocked() noexcept{
 	}
 }
 
-void WiFiService::applyLocked(WiFiLink::Step step, const esp_netif_ip_info_t* ip) noexcept{
+void WiFiService::applyLocked(WiFiLink::Step step) noexcept{
 	if(step.onlineChanged){
 		if(link.online()){
 			xEventGroupSetBits(events, OnlineBit);
 			// The leased (DHCP) address, so a tester can tell it from RC mode's static 11.0.0.2. No credentials.
-			const esp_ip4_addr_t addr = ip != nullptr ? ip->ip : esp_ip4_addr_t{};
+			const esp_ip4_addr_t addr = {link.address()};
 			CMF_LOG(WiFiService, LogLevel::Warning, "Home Wi-Fi online: \"%s\", IP " IPSTR ".", home.ssid, IP2STR(&addr));
 		}else{
 			xEventGroupClearBits(events, OnlineBit);

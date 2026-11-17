@@ -75,9 +75,9 @@ private:
 
 	void applyHomeConfig() noexcept;
 	void connectHomeLocked() noexcept;
-	// Carries out a WiFiLink step: mirrors and logs an online change (with the leased address, when given), arms
-	// the reconnect timer.
-	void applyLocked(WiFiLink::Step step, const esp_netif_ip_info_t* ip = nullptr) noexcept;
+	// Carries out a WiFiLink step: mirrors and logs an online change (with the leased address), arms the reconnect
+	// timer.
+	void applyLocked(WiFiLink::Step step) noexcept;
 };
 
 #endif //BUTTERBOT_FIRMWARE_WIFISERVICE_H
