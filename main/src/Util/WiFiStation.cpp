@@ -102,11 +102,17 @@ void WiFiStation::onScanDone(uint32_t status, uint8_t number, uint8_t id) noexce
         return;
     }
 
+	CMF_LOG(WiFiStation, LogLevel::Info, "Attempting connect to the controller network.");
+    // On failure the driver still holds the home network: connecting would join it with RC's static 11.0.0.2.
+    if(!wifi->setTargetParameters(SSID, password)){
+    	CMF_LOG(WiFiStation, LogLevel::Error, "Controller network config not applied, not connecting.");
+        state = State::Disconnected;
+        OnStationEvent.broadcast(EventType::Connect/*, ""*/, false);
+        return;
+    }
+
     state = State::Connecting;
     connectTries = 0;
-
-	CMF_LOG(WiFiStation, LogLevel::Info, "Attempting connect to the controller network.");
-    wifi->setTargetParameters(SSID, password);
     wifi->connect();
 }
 

@@ -6,6 +6,14 @@
 
 DEFINE_LOG(WiFi)
 
+// Zeroes a config that held a password, through volatile stores the compiler cannot drop as dead (C8).
+[[maybe_unused]] static void wipe(wifi_config_t& config) noexcept {
+    volatile uint8_t* bytes = reinterpret_cast<volatile uint8_t*>(&config);
+    for(size_t i = 0; i < sizeof(config); ++i) {
+        bytes[i] = 0;
+    }
+}
+
 WiFi::WiFi() noexcept : Super() {
     ESP_ERROR_CHECK(esp_event_loop_create_default());
     esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, [](void* arg, esp_event_base_t base, int32_t id, void* data) {
@@ -78,6 +86,8 @@ void WiFi::startAccessPoint(const std::string& name, const std::string& password
 
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &cfg_ap));
+    // The driver keeps its own copy; this stack copy of the password goes now.
+    wipe(cfg_ap);
     ESP_ERROR_CHECK(esp_wifi_start());
 
     initSemaphore.acquire();
@@ -111,15 +121,26 @@ void WiFi::setNetworkParameters(const std::string& name, const std::string& pass
     }
 
     wifi_config_t config = {};
-    esp_wifi_get_config(WIFI_IF_AP, &config);
+    // Read back so the other AP settings survive; it holds the current password, so every exit wipes it (C8).
+    esp_err_t err = esp_wifi_get_config(WIFI_IF_AP, &config);
+    if(err != ESP_OK) {
+        CMF_LOG(WiFi, LogLevel::Error, "WiFi access point config read failed: %s", esp_err_to_name(err));
+        wipe(config);
+        return;
+    }
 
     if(!copyCredentials(config.ap.ssid, sizeof(config.ap.ssid), config.ap.password, sizeof(config.ap.password), name, password)) {
         CMF_LOG(WiFi, LogLevel::Error, "WiFi access point SSID or password too long, not applied.");
+        wipe(config);
         return;
     }
     config.ap.ssid_len = name.size();
 
-    esp_wifi_set_config(WIFI_IF_AP, &config);
+    err = esp_wifi_set_config(WIFI_IF_AP, &config);
+    wipe(config);
+    if(err != ESP_OK) {
+        CMF_LOG(WiFi, LogLevel::Error, "WiFi access point config refused: %s", esp_err_to_name(err));
+    }
 }
 
 #endif
@@ -217,23 +238,29 @@ int WiFi::getConnectionRSSI() const noexcept {
     return rssi;
 }
 
-void WiFi::setTargetParameters(const std::string& ssid, const std::string& password) const noexcept {
+bool WiFi::setTargetParameters(const std::string& ssid, const std::string& password) const noexcept {
     if(type != WiFiType::Station) {
-        return;
+        return false;
     }
 
     wifi_config_t cfg_wifi = {};
 
+    // Nothing is copied when this fails, so there is nothing to wipe.
     if(!copyCredentials(cfg_wifi.sta.ssid, sizeof(cfg_wifi.sta.ssid), cfg_wifi.sta.password, sizeof(cfg_wifi.sta.password), ssid, password)) {
         CMF_LOG(WiFi, LogLevel::Error, "WiFi station SSID or password too long, not applied.");
-        return;
+        return false;
     }
 
     // The values come from the controller over BLE: a config the driver refuses must not reboot the robot (E2).
     const esp_err_t err = esp_wifi_set_config(WIFI_IF_STA, &cfg_wifi);
+    // The driver keeps its own copy; this stack copy of the password goes now (C8).
+    wipe(cfg_wifi);
     if(err != ESP_OK) {
         CMF_LOG(WiFi, LogLevel::Error, "WiFi station config refused: %s", esp_err_to_name(err));
+        return false;
     }
+
+    return true;
 }
 
 std::vector<wifi_ap_record_t> WiFi::getAPRecords(size_t maxScanSize) const noexcept {
