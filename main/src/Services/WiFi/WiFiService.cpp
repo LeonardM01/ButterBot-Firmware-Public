@@ -15,7 +15,7 @@ static_assert(WiFiCredentials::isValidPassword(BB_WIFI_PASSWORD),
 
 // Logs a failed driver call and carries on (E3, E4): every caller below has a retry or a later event to fall back on.
 // `benign` is an error code that only means "already in that state".
-static void check(esp_err_t err, const char* what, esp_err_t benign = ESP_OK){
+static void logIfFailed(esp_err_t err, const char* what, esp_err_t benign = ESP_OK){
 	if(err != ESP_OK && err != benign){
 		CMF_LOG(WiFiService, Error, "%s failed: %s", what, esp_err_to_name(err));
 	}
@@ -47,7 +47,7 @@ WiFiService::WiFiService() noexcept : homeValid(WiFiCredentials::loadHome(home, 
 	wifi->startStation(WiFi::StationAddressing::Dhcp, WIFI_STORAGE_RAM);
 
 	// Modem sleep is required for Wi-Fi and BLE coexistence.
-	check(esp_wifi_set_ps(WIFI_PS_MIN_MODEM), "Modem sleep");
+	logIfFailed(esp_wifi_set_ps(WIFI_PS_MIN_MODEM), "Modem sleep");
 
 	applyHomeConfig();
 
@@ -72,28 +72,28 @@ WiFi* WiFiService::useControllerProfile() noexcept{
 	{
 		std::lock_guard guard(lock);
 		applyLocked(link.useController());
-		check(esp_timer_stop(reconnectTimer), "Stopping the Wi-Fi retry", ESP_ERR_INVALID_STATE);
+		logIfFailed(esp_timer_stop(reconnectTimer), "Stopping the Wi-Fi retry", ESP_ERR_INVALID_STATE);
 	}
 
 	CMF_LOG(WiFiService, LogLevel::Warning, "Leaving home Wi-Fi for RC mode.");
 
-	check(esp_wifi_disconnect(), "Leaving home Wi-Fi");
+	logIfFailed(esp_wifi_disconnect(), "Leaving home Wi-Fi");
 
 	// A static address cannot be set while the DHCP client runs.
-	check(esp_netif_dhcpc_stop(wifi->getNetif()), "Stopping DHCP", ESP_ERR_ESP_NETIF_DHCP_ALREADY_STOPPED);
+	logIfFailed(esp_netif_dhcpc_stop(wifi->getNetif()), "Stopping DHCP", ESP_ERR_ESP_NETIF_DHCP_ALREADY_STOPPED);
 	wifi->resetIPInfo();
 
 	return *wifi;
 }
 
 void WiFiService::useHomeProfile() noexcept{
-	check(esp_wifi_scan_stop(), "Stopping the controller scan");
-	check(esp_wifi_disconnect(), "Leaving the controller network");
+	logIfFailed(esp_wifi_scan_stop(), "Stopping the controller scan");
+	logIfFailed(esp_wifi_disconnect(), "Leaving the controller network");
 
 	CMF_LOG(WiFiService, LogLevel::Warning, "Rejoining home Wi-Fi \"%s\".", home.ssid);
 
 	// Clears the static RC address; if the link is down DHCP starts on the next association.
-	check(esp_netif_dhcpc_start(wifi->getNetif()), "Starting DHCP", ESP_ERR_ESP_NETIF_DHCP_ALREADY_STARTED);
+	logIfFailed(esp_netif_dhcpc_start(wifi->getNetif()), "Starting DHCP", ESP_ERR_ESP_NETIF_DHCP_ALREADY_STARTED);
 
 	applyHomeConfig();
 
@@ -178,7 +178,7 @@ void WiFiService::applyHomeConfig() noexcept{
 	cfg.sta.pmf_cfg.required = false;
 	cfg.sta.sae_pwe_h2e = WPA3_SAE_PWE_BOTH;
 
-	check(esp_wifi_set_config(WIFI_IF_STA, &cfg), "Applying the home Wi-Fi config");
+	logIfFailed(esp_wifi_set_config(WIFI_IF_STA, &cfg), "Applying the home Wi-Fi config");
 
 	// The driver keeps its own copy (in RAM, WIFI_STORAGE_RAM); this stack copy of the password goes now (C8).
 	WiFiCredentials::wipe(&cfg, sizeof(cfg));
@@ -190,7 +190,7 @@ void WiFiService::connectHomeLocked() noexcept{
 	}
 
 	// A connect starts now, so an armed retry is moot: firing later it would cut this attempt short.
-	check(esp_timer_stop(reconnectTimer), "Stopping the Wi-Fi retry", ESP_ERR_INVALID_STATE);
+	logIfFailed(esp_timer_stop(reconnectTimer), "Stopping the Wi-Fi retry", ESP_ERR_INVALID_STATE);
 
 	// No scan of our own: esp_wifi_connect scans every channel for the configured network.
 	const esp_err_t err = esp_wifi_connect();
@@ -216,7 +216,7 @@ void WiFiService::applyLocked(WiFiLink::Step step) noexcept{
 	}
 
 	if(step.retryInMs != 0){
-		check(esp_timer_stop(reconnectTimer), "Stopping the Wi-Fi retry", ESP_ERR_INVALID_STATE);
-		check(esp_timer_start_once(reconnectTimer, static_cast<uint64_t>(step.retryInMs) * 1000), "Arming the Wi-Fi retry");
+		logIfFailed(esp_timer_stop(reconnectTimer), "Stopping the Wi-Fi retry", ESP_ERR_INVALID_STATE);
+		logIfFailed(esp_timer_start_once(reconnectTimer, static_cast<uint64_t>(step.retryInMs) * 1000), "Arming the Wi-Fi retry");
 	}
 }
