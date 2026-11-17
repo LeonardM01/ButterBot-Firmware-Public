@@ -90,11 +90,6 @@ void WiFiService::useHomeProfile() noexcept{
 	check(esp_wifi_scan_stop(), "Stopping the controller scan");
 	check(esp_wifi_disconnect(), "Leaving the controller network");
 
-	{
-		std::lock_guard guard(lock);
-		link.useHome();
-	}
-
 	CMF_LOG(WiFiService, LogLevel::Warning, "Rejoining home Wi-Fi \"%s\".", home.ssid);
 
 	// Clears the static RC address; if the link is down DHCP starts on the next association.
@@ -102,7 +97,11 @@ void WiFiService::useHomeProfile() noexcept{
 
 	applyHomeConfig();
 
+	// Home only now, in the same critical section as the connect: until here the link is still in the controller
+	// profile, so the drop from the disconnect above (often unnamed) is not counted as a home failure that would
+	// arm a second, overlapping connect.
 	std::lock_guard guard(lock);
+	link.useHome();
 	connectHomeLocked();
 }
 
@@ -189,6 +188,9 @@ void WiFiService::connectHomeLocked() noexcept{
 	if(!link.homeActive() || !homeValid){
 		return;
 	}
+
+	// A connect starts now, so an armed retry is moot: firing later it would cut this attempt short.
+	check(esp_timer_stop(reconnectTimer), "Stopping the Wi-Fi retry", ESP_ERR_INVALID_STATE);
 
 	// No scan of our own: esp_wifi_connect scans every channel for the configured network.
 	const esp_err_t err = esp_wifi_connect();

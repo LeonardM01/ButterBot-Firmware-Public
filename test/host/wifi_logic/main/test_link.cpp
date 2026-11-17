@@ -149,6 +149,18 @@ static void test_the_controller_drop_after_leaving_rc_is_not_a_home_failure(){
 	TEST_ASSERT_EQUAL_UINT32(1000, link.disconnected("HomeNet").retryInMs);
 }
 
+static void test_an_unnamed_drop_in_rc_mode_is_not_a_home_failure(){
+	// WiFiService leaves the controller network while the link is still in RC mode, then switches to home and
+	// connects in one step: the drop that disconnect raises, often without a name, must not arm a retry.
+	WiFiLink link("HomeNet");
+	link.useController();
+
+	TEST_ASSERT_EQUAL_UINT32(0, link.disconnected("").retryInMs);
+
+	link.useHome();
+	TEST_ASSERT_EQUAL_UINT32(1000, link.disconnected("HomeNet").retryInMs); // the schedule did not advance
+}
+
 static void test_a_drop_without_a_network_name_counts_as_home(){
 	WiFiLink link("HomeNet");
 
@@ -182,6 +194,7 @@ void runLinkTests(){
 	RUN_TEST(test_rc_mode_goes_offline_and_never_retries_home);
 	RUN_TEST(test_leaving_rc_rejoins_home_on_a_fresh_schedule);
 	RUN_TEST(test_the_controller_drop_after_leaving_rc_is_not_a_home_failure);
+	RUN_TEST(test_an_unnamed_drop_in_rc_mode_is_not_a_home_failure);
 	RUN_TEST(test_a_drop_without_a_network_name_counts_as_home);
 	RUN_TEST(test_a_full_32_byte_home_ssid_matches_its_unterminated_event_name);
 	RUN_TEST(test_a_lost_lease_goes_offline_without_a_retry);
