@@ -99,6 +99,11 @@ private:
 
 private:
     void onNativeEvent(uint32_t id, void* data) noexcept;
+
+    // Copies an SSID and password into fixed driver fields; false, with nothing written, if either is too long.
+    static bool copyCredentials(uint8_t* ssidField, size_t ssidSize, uint8_t* passwordField, size_t passwordSize,
+                                const std::string& ssid, const std::string& password) noexcept;
+
     void createNetif(StationAddressing addressing = StationAddressing::Static11) noexcept;
 };
 

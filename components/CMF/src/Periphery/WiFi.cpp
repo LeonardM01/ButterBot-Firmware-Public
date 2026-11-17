@@ -70,8 +70,11 @@ void WiFi::startAccessPoint(const std::string& name, const std::string& password
         },
     };
 
-    strcpy(reinterpret_cast<char *>(cfg_ap.ap.ssid), name.c_str());
-    strcpy(reinterpret_cast<char *>(cfg_ap.ap.password), password.c_str());
+    if(!copyCredentials(cfg_ap.ap.ssid, sizeof(cfg_ap.ap.ssid), cfg_ap.ap.password, sizeof(cfg_ap.ap.password), name, password)) {
+        CMF_LOG(WiFi, LogLevel::Error, "WiFi access point SSID or password too long, not started.");
+        return;
+    }
+    cfg_ap.ap.ssid_len = name.size();
 
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &cfg_ap));
@@ -107,11 +110,14 @@ void WiFi::setNetworkParameters(const std::string& name, const std::string& pass
         return;
     }
 
-    wifi_config_t config;
+    wifi_config_t config = {};
     esp_wifi_get_config(WIFI_IF_AP, &config);
 
-    strcpy((char*) config.ap.ssid, name.c_str());
-    strcpy((char*) config.ap.password, password.c_str());
+    if(!copyCredentials(config.ap.ssid, sizeof(config.ap.ssid), config.ap.password, sizeof(config.ap.password), name, password)) {
+        CMF_LOG(WiFi, LogLevel::Error, "WiFi access point SSID or password too long, not applied.");
+        return;
+    }
+    config.ap.ssid_len = name.size();
 
     esp_wifi_set_config(WIFI_IF_AP, &config);
 }
@@ -218,17 +224,16 @@ void WiFi::setTargetParameters(const std::string& ssid, const std::string& passw
 
     wifi_config_t cfg_wifi = {};
 
-    // Bounded copies: a 32-byte SSID fills the field with no terminator (the driver accepts that); longer values
-    // are rejected rather than overflowing into the next field.
-    if(ssid.size() > sizeof(cfg_wifi.sta.ssid) || password.size() > sizeof(cfg_wifi.sta.password)) {
+    if(!copyCredentials(cfg_wifi.sta.ssid, sizeof(cfg_wifi.sta.ssid), cfg_wifi.sta.password, sizeof(cfg_wifi.sta.password), ssid, password)) {
         CMF_LOG(WiFi, LogLevel::Error, "WiFi station SSID or password too long, not applied.");
         return;
     }
 
-    memcpy(cfg_wifi.sta.ssid, ssid.data(), ssid.size());
-    memcpy(cfg_wifi.sta.password, password.data(), password.size());
-
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &cfg_wifi));
+    // The values come from the controller over BLE: a config the driver refuses must not reboot the robot (E2).
+    const esp_err_t err = esp_wifi_set_config(WIFI_IF_STA, &cfg_wifi);
+    if(err != ESP_OK) {
+        CMF_LOG(WiFi, LogLevel::Error, "WiFi station config refused: %s", esp_err_to_name(err));
+    }
 }
 
 std::vector<wifi_ap_record_t> WiFi::getAPRecords(size_t maxScanSize) const noexcept {
@@ -243,6 +248,22 @@ std::vector<wifi_ap_record_t> WiFi::getAPRecords(size_t maxScanSize) const noexc
     return result;
 }
 #endif
+
+bool WiFi::copyCredentials(uint8_t* ssidField, size_t ssidSize, uint8_t* passwordField, size_t passwordSize,
+                           const std::string& ssid, const std::string& password) noexcept {
+    // Bounded copies (C1): a value that fills its field exactly is stored without a terminator (the driver accepts
+    // that); a longer one is rejected rather than overflowing into the next field.
+    if(ssid.size() > ssidSize || password.size() > passwordSize) {
+        return false;
+    }
+
+    // Callers may pass a config read back from the driver: clear the previous, possibly longer, values first.
+    memset(ssidField, 0, ssidSize);
+    memset(passwordField, 0, passwordSize);
+    memcpy(ssidField, ssid.data(), ssid.size());
+    memcpy(passwordField, password.data(), password.size());
+    return true;
+}
 
 void WiFi::onNativeEvent(uint32_t id, void *data) noexcept {
     CMF_LOG(WiFi, LogLevel::Info, "WiFi native event received: %ld", id);
