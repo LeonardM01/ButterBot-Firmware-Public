@@ -57,6 +57,9 @@ namespace WiFiCredentials {
 	// A value that fills the field exactly is stored without a terminator (the driver accepts that); the rest is
 	// zero-filled. Returns false and zeroes the whole field when `src` is longer than `fieldSize`.
 	bool copyToField(uint8_t* field, size_t fieldSize, const char* src) noexcept;
+
+	// Zeroes a buffer that held a secret, in a way the compiler cannot drop as a dead store (C8).
+	void wipe(void* buffer, size_t size) noexcept;
 }
 
 #endif //BUTTERBOT_FIRMWARE_WIFICREDENTIALS_H
